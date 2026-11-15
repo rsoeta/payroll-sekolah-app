@@ -1,0 +1,1273 @@
+/**
+ * Local Sandbox Database Mirror (Simulates Google Sheets 6-Tab Schema + Object-Level RBAC)
+ * Used ONLY when no live Google Apps Script Web App URL (`VITE_GAS_API_URL`) is configured yet.
+ * Strictly mirrors `v1_GasBackend_Init.js`:
+ * - UUID v4 Primary Keys for all 6 tables
+ * - Users_Auth stores salted SHA-256 hashes (no plaintext passwords stored in tables)
+ * - Enforces Object-Level RBAC (403 Forbidden / 404 Not Found on unauthorized access)
+ */
+
+import { normalizePeriodKey, parsePeriodMonthKey } from '../utils/formatters';
+
+const STORAGE_KEY = 'sipayroll_sheets_sandbox_v1';
+
+// Deterministic UUIDv4 seeds for relational integrity across the 6 tabs
+const SEED_IDS = {
+  userAdmin: '11111111-2222-4333-8444-555555550001',
+  userKepsek: '11111111-2222-4333-8444-555555550002',
+  userGuru1: '11111111-2222-4333-8444-555555550003',
+  userGuru2: '11111111-2222-4333-8444-555555550004',
+  userGuru3: '11111111-2222-4333-8444-555555550005',
+
+  teacher1: '22222222-3333-4444-8555-666666660001',
+  teacher2: '22222222-3333-4444-8555-666666660002',
+  teacher3: '22222222-3333-4444-8555-666666660003',
+
+  payrollOct: '55555555-6666-4777-8888-999999990001',
+  payrollNov: '55555555-6666-4777-8888-999999990002',
+};
+
+function generateUuidV4() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID();
+  }
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = (Math.random() * 16) | 0;
+    const v = c === 'x' ? r : (r & 0x3) | 0x8;
+    return v.toString(16);
+  });
+}
+
+async function sha256Hex(message) {
+  const msgBuffer = new TextEncoder().encode(message);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', msgBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function buildInitialDatabase() {
+  const Users_Auth = [
+    {
+      id: SEED_IDS.userAdmin,
+      username: 'admin.sekolah@gmail.com',
+      email: 'admin.sekolah@gmail.com',
+      password_hash: 'GMAIL_AUTH',
+      role: 'admin',
+    },
+    {
+      id: SEED_IDS.userKepsek,
+      username: 'kepsek.sekolah@gmail.com',
+      email: 'kepsek.sekolah@gmail.com',
+      password_hash: 'GMAIL_AUTH',
+      role: 'kepsek',
+    },
+    {
+      id: SEED_IDS.userGuru1,
+      username: 'budi.santoso@gmail.com',
+      email: 'budi.santoso@gmail.com',
+      password_hash: 'GMAIL_AUTH',
+      role: 'guru',
+    },
+    {
+      id: SEED_IDS.userGuru2,
+      username: 'siti.aisyah@gmail.com',
+      email: 'siti.aisyah@gmail.com',
+      password_hash: 'GMAIL_AUTH',
+      role: 'guru',
+    },
+    {
+      id: SEED_IDS.userGuru3,
+      username: 'rizky.pratama@gmail.com',
+      email: 'rizky.pratama@gmail.com',
+      password_hash: 'GMAIL_AUTH',
+      role: 'guru',
+    },
+  ];
+
+  const Teachers = [
+    {
+      id: SEED_IDS.teacher1,
+      user_id: SEED_IDS.userGuru1,
+      nip: '19880412201501',
+      name: 'Budi Santoso, S.Pd., M.Pd.',
+      status: 'GTY (Guru Tetap Yayasan)',
+      bank_account: 'BSI 7149283741',
+      email: 'budi.santoso@gmail.com',
+    },
+    {
+      id: SEED_IDS.teacher2,
+      user_id: SEED_IDS.userGuru2,
+      nip: '19910823201802',
+      name: 'Siti Aisyah, S.Si.',
+      status: 'GTY (Guru Tetap Yayasan)',
+      bank_account: 'BSI 7283910492',
+      email: 'siti.aisyah@gmail.com',
+    },
+    {
+      id: SEED_IDS.teacher3,
+      user_id: SEED_IDS.userGuru3,
+      nip: '19951104202101',
+      name: 'Rizky Pratama, S.Kom.',
+      status: 'GTT (Guru Tidak Tetap)',
+      bank_account: 'Mandiri 137001928371',
+      email: 'rizky.pratama@gmail.com',
+    },
+  ];
+
+  const Salary_Components = [
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      base_salary: 3500000,
+      hourly_rate: 55000,
+      position_allowance: 750000,
+      bpjs_deduction: 150000,
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher2,
+      base_salary: 3200000,
+      hourly_rate: 50000,
+      position_allowance: 500000,
+      bpjs_deduction: 140000,
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher3,
+      base_salary: 2200000,
+      hourly_rate: 45000,
+      position_allowance: 300000,
+      bpjs_deduction: 100000,
+    },
+  ];
+
+  const Attendances = [
+    // October 2026
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      month: 10,
+      year: 2026,
+      present_days: 22,
+      absent_days: 0,
+      total_jtm: 28,
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher2,
+      month: 10,
+      year: 2026,
+      present_days: 21,
+      absent_days: 1,
+      total_jtm: 24,
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher3,
+      month: 10,
+      year: 2026,
+      present_days: 20,
+      absent_days: 0,
+      total_jtm: 20,
+    },
+    // November 2026
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      month: 11,
+      year: 2026,
+      present_days: 21,
+      absent_days: 0,
+      total_jtm: 26,
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher2,
+      month: 11,
+      year: 2026,
+      present_days: 22,
+      absent_days: 0,
+      total_jtm: 26,
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher3,
+      month: 11,
+      year: 2026,
+      present_days: 19,
+      absent_days: 1,
+      total_jtm: 18,
+    },
+  ];
+
+  // Helper to construct Payroll_Details rows
+  const makeDetail = (payrollId, teacher, comp, att) => {
+    const jtmHonor = att.total_jtm * comp.hourly_rate;
+    const gross = comp.base_salary + jtmHonor + comp.position_allowance;
+    const net = gross - comp.bpjs_deduction;
+    return {
+      id: generateUuidV4(),
+      payroll_id: payrollId,
+      teacher_id: teacher.id,
+      net_salary: net,
+      details_json: JSON.stringify({
+        teacher_name: teacher.name,
+        nip: teacher.nip,
+        status: teacher.status,
+        bank_account: teacher.bank_account,
+        month: att.month,
+        year: att.year,
+        present_days: att.present_days,
+        absent_days: att.absent_days,
+        total_jtm: att.total_jtm,
+        base_salary: comp.base_salary,
+        hourly_rate: comp.hourly_rate,
+        jtm_honor: jtmHonor,
+        position_allowance: comp.position_allowance,
+        bpjs_deduction: comp.bpjs_deduction,
+        gross_salary: gross,
+        net_salary: net,
+      }),
+    };
+  };
+
+  const octDetails = Teachers.map((t, idx) =>
+    makeDetail(SEED_IDS.payrollOct, t, Salary_Components[idx], Attendances[idx])
+  );
+  const novDetails = Teachers.map((t, idx) =>
+    makeDetail(SEED_IDS.payrollNov, t, Salary_Components[idx], Attendances[idx + 3])
+  );
+
+  const Payrolls = [
+    {
+      id: SEED_IDS.payrollOct,
+      month: 10,
+      year: 2026,
+      total_budget: octDetails.reduce((acc, d) => acc + d.net_salary, 0),
+      status: 'paid',
+    },
+    {
+      id: SEED_IDS.payrollNov,
+      month: 11,
+      year: 2026,
+      total_budget: novDetails.reduce((acc, d) => acc + d.net_salary, 0),
+      status: 'submitted',
+    },
+  ];
+
+  const Payroll_Details = [...octDetails, ...novDetails];
+
+  return {
+    Users_Auth,
+    Teachers,
+    Salary_Components,
+    Attendances,
+    Payrolls,
+    Payroll_Details,
+  };
+}
+
+function upgradeLegacyDbToGmail(db) {
+  if (!db || !Array.isArray(db.Users_Auth)) return db;
+  let modified = false;
+
+  const legacyMap = {
+    admin: 'admin.sekolah@gmail.com',
+    kepsek: 'kepsek.sekolah@gmail.com',
+  };
+
+  db.Users_Auth.forEach((u) => {
+    const rawUser = String(u.email || u.username || '').trim().toLowerCase();
+    if (legacyMap[rawUser]) {
+      u.username = legacyMap[rawUser];
+      u.email = legacyMap[rawUser];
+      modified = true;
+    } else if (rawUser && !rawUser.includes('@')) {
+      u.username = `${rawUser}@gmail.com`;
+      u.email = `${rawUser}@gmail.com`;
+      modified = true;
+    } else if (!u.email && u.username) {
+      u.email = u.username.toLowerCase();
+      modified = true;
+    }
+  });
+
+  if (Array.isArray(db.Teachers)) {
+    db.Teachers.forEach((t) => {
+      if (!t.email) {
+        const linkedUser = db.Users_Auth.find((u) => u.id === t.user_id);
+        if (linkedUser) {
+          t.email = String(linkedUser.email || linkedUser.username || '').toLowerCase();
+          modified = true;
+        }
+      }
+    });
+  }
+
+  if (modified) {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+  }
+  return db;
+}
+
+async function getDb() {
+  const raw = localStorage.getItem(STORAGE_KEY);
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      return upgradeLegacyDbToGmail(parsed);
+    } catch {
+      // Fall through to rebuild
+    }
+  }
+  const fresh = await buildInitialDatabase();
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
+  return fresh;
+}
+
+function saveDb(db) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(db));
+}
+
+export async function resetSandboxDb() {
+  localStorage.removeItem(STORAGE_KEY);
+  return getDb();
+}
+
+const SANDBOX_OTP_KEY = 'sipayroll_sandbox_otp_v1';
+
+function readSandboxOtpStore() {
+  try {
+    const raw = localStorage.getItem(SANDBOX_OTP_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeSandboxOtpStore(store) {
+  try {
+    localStorage.setItem(SANDBOX_OTP_KEY, JSON.stringify(store));
+  } catch {
+    // Ignore storage error
+  }
+}
+
+function findOrSyncUserByEmail(db, rawEmail) {
+  const cleanEmail = String(rawEmail || '').trim().toLowerCase();
+  if (!cleanEmail) return null;
+
+  let user = db.Users_Auth.find(
+    (u) =>
+      String(u.email || u.username || '')
+        .trim()
+        .toLowerCase() === cleanEmail
+  );
+
+  if (!user) {
+    const matchedTeacher = db.Teachers.find(
+      (t) => String(t.email || '').trim().toLowerCase() === cleanEmail
+    );
+    if (matchedTeacher) {
+      user = {
+        id: matchedTeacher.user_id || generateUuidV4(),
+        username: cleanEmail,
+        email: cleanEmail,
+        password_hash: 'GMAIL_OTP_VERIFIED',
+        role: 'guru',
+      };
+      db.Users_Auth.push(user);
+      matchedTeacher.user_id = user.id;
+      saveDb(db);
+    }
+  }
+
+  return user || null;
+}
+
+/**
+ * Verifies an optional Google OAuth2 JWT ID Token or Access Token,
+ * or verifies the 6-digit Gmail OTP / Sandbox Demo Login.
+ */
+async function verifyGoogleOAuthPayload(payload) {
+  // 1. Google Identity Services ID Token (JWT)
+  if (payload.id_token && typeof payload.id_token === 'string') {
+    const parts = payload.id_token.split('.');
+    if (parts.length >= 2) {
+      try {
+        const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+        const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+        const decodedJson = decodeURIComponent(
+          Array.prototype.map
+            .call(atob(padded), (c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+            .join('')
+        );
+        const claims = JSON.parse(decodedJson);
+        if (claims && claims.email && claims.email_verified !== false) {
+          return {
+            email: String(claims.email).trim().toLowerCase(),
+            name: claims.name || '',
+            picture: claims.picture || '',
+            email_verified: true,
+          };
+        }
+      } catch {
+        // Fall through
+      }
+    }
+  }
+
+  // 2. Google OAuth2 Access Token
+  if (payload.access_token && typeof payload.access_token === 'string') {
+    try {
+      const res = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+        headers: { Authorization: `Bearer ${payload.access_token}` },
+      });
+      if (res.ok) {
+        const info = await res.json();
+        if (info && info.email && info.email_verified !== false) {
+          return {
+            email: String(info.email).trim().toLowerCase(),
+            name: info.name || '',
+            picture: info.picture || '',
+            email_verified: true,
+          };
+        }
+      }
+    } catch {
+      // Fall through
+    }
+  }
+
+  // 3. Sandbox Demo Quick Login (hanya berlaku di Mode Simulasi)
+  if (payload.demo_quick_login === true) {
+    const demoEmail = String(payload.email || '').trim().toLowerCase();
+    if (demoEmail && demoEmail.includes('@')) {
+      return {
+        email: demoEmail,
+        name: String(payload.name || '').trim(),
+        picture: '',
+        email_verified: true,
+      };
+    }
+  }
+
+  // 4. Verifikasi Kode OTP 6-Digit Gmail (Mode Simulasi)
+  const cleanEmail = String(payload.email || '').trim().toLowerCase();
+  const inputOtp = String(payload.otp || '').trim();
+  if (cleanEmail && inputOtp) {
+    const store = readSandboxOtpStore();
+    const record = store[cleanEmail];
+    if (!record) {
+      return { error: 'Kode verifikasi tidak ditemukan atau sudah kedaluwarsa. Silakan minta kode baru.' };
+    }
+    if (Date.now() > Number(record.expiresAt || 0)) {
+      delete store[cleanEmail];
+      writeSandboxOtpStore(store);
+      return { error: 'Kode verifikasi telah kedaluwarsa. Silakan kirim ulang kode baru ke Gmail Anda.' };
+    }
+    if ((record.attempts || 0) >= 5) {
+      delete store[cleanEmail];
+      writeSandboxOtpStore(store);
+      return { error: 'Terlalu banyak percobaan salah. Silakan minta kode verifikasi baru.' };
+    }
+    if (String(record.otp) !== inputOtp) {
+      record.attempts = (record.attempts || 0) + 1;
+      store[cleanEmail] = record;
+      writeSandboxOtpStore(store);
+      return { error: 'Kode verifikasi 6 digit tidak sesuai. Periksa kembali kode Anda.' };
+    }
+    delete store[cleanEmail];
+    writeSandboxOtpStore(store);
+    return {
+      email: cleanEmail,
+      name: '',
+      picture: '',
+      email_verified: true,
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Executes a request against the local Google Sheets Sandbox with strict Object-Level RBAC.
+ */
+export async function executeSandboxRequest(method, action, token, payload = {}) {
+  const db = await getDb();
+
+  // 1a. Minta Kode Verifikasi OTP 6-Digit ke Gmail (tervalidasi terhadap Users_Auth)
+  if (action === 'auth.requestOtp' && method === 'POST') {
+    const cleanEmail = String(payload.email || '').trim().toLowerCase();
+    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      return {
+        ok: false,
+        status: 400,
+        error: 'Masukkan alamat email Gmail yang valid.',
+      };
+    }
+
+    const user = findOrSyncUserByEmail(db, cleanEmail);
+    if (!user) {
+      return {
+        ok: false,
+        status: 403,
+        error: `Akses Ditolak: Alamat Gmail "${cleanEmail}" belum terdaftar pada daftar akun (Users_Auth) oleh Admin Sekolah.`,
+      };
+    }
+
+    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
+    const store = readSandboxOtpStore();
+    store[cleanEmail] = {
+      otp: otpCode,
+      expiresAt: Date.now() + 300 * 1000,
+      attempts: 0,
+    };
+    writeSandboxOtpStore(store);
+
+    return {
+      ok: true,
+      status: 200,
+      data: {
+        email: cleanEmail,
+        expiresInSeconds: 300,
+        simulationOtp: otpCode,
+      },
+    };
+  }
+
+  // 1b. Verifikasi OTP / Login Gmail (Authorized against Users_Auth)
+  if ((action === 'auth.login' || action === 'auth.verifyOtp') && method === 'POST') {
+    const oauthProfile = await verifyGoogleOAuthPayload(payload);
+    if (!oauthProfile || oauthProfile.error || !oauthProfile.email) {
+      return {
+        ok: false,
+        status: 401,
+        error:
+          (oauthProfile && oauthProfile.error) ||
+          'Verifikasi Akun Gmail gagal atau kode OTP belum dimasukkan.',
+      };
+    }
+
+    const rawEmail = oauthProfile.email;
+    const user = findOrSyncUserByEmail(db, rawEmail);
+
+    if (!user) {
+      return {
+        ok: false,
+        status: 403,
+        error: `Akses Ditolak: Akun Google "${rawEmail}" terverifikasi, namun belum terdaftar pada sheet Users_Auth oleh Admin.`,
+      };
+    }
+
+    const linkedTeacher =
+      user.role === 'guru'
+        ? db.Teachers.find(
+            (t) =>
+              t.user_id === user.id ||
+              String(t.email || '').trim().toLowerCase() === rawEmail
+          ) || null
+        : null;
+
+    const displayName =
+      linkedTeacher?.name ||
+      oauthProfile.name ||
+      (user.role === 'admin'
+        ? 'Admin / Bendahara'
+        : user.role === 'kepsek'
+        ? 'Kepala Sekolah'
+        : rawEmail);
+
+    const sessionPayload = {
+      userId: user.id,
+      username: rawEmail,
+      email: rawEmail,
+      role: user.role,
+      teacherId: linkedTeacher ? linkedTeacher.id : null,
+      teacherName: displayName,
+      picture: oauthProfile.picture || '',
+      exp: Math.floor(Date.now() / 1000) + 3600 * 8,
+    };
+
+    const encodedToken = btoa(JSON.stringify(sessionPayload)) + '.sandbox_sig';
+    return {
+      ok: true,
+      status: 200,
+      version: 'v7_GoogleOAuth2_SSO (Sandbox)',
+      data: {
+        token: encodedToken,
+        expiresAt: sessionPayload.exp * 1000,
+        user: {
+          id: sessionPayload.userId,
+          username: sessionPayload.username,
+          email: sessionPayload.email,
+          role: sessionPayload.role,
+          teacherId: sessionPayload.teacherId,
+          name: sessionPayload.teacherName,
+          picture: sessionPayload.picture,
+        },
+      },
+    };
+  }
+
+  if (action === 'schoolProfile.get') {
+    return {
+      ok: true,
+      status: 200,
+      data: db.School_Profile || null,
+    };
+  }
+
+  // 2. Verify Session Token
+  if (!token || !token.includes('.')) {
+    return { ok: false, status: 401, error: 'Unauthorized: Sesi berakhir atau tidak valid.' };
+  }
+
+  let session;
+  try {
+    session = JSON.parse(atob(token.split('.')[0]));
+    if (session.exp * 1000 < Date.now()) {
+      return { ok: false, status: 401, error: 'Unauthorized: Token sesi telah kedaluwarsa.' };
+    }
+  } catch {
+    return { ok: false, status: 401, error: 'Unauthorized: Token korup.' };
+  }
+
+  const forbidden = () => ({
+    ok: false,
+    status: 403,
+    error: '403 Forbidden: Pelanggaran Object-Level RBAC.',
+  });
+  const notFound = () => ({
+    ok: false,
+    status: 404,
+    error: '404 Not Found: Resource tidak ditemukan.',
+  });
+
+  // Helper for Guru Object-Level Ownership
+  const getOwnedTeacher = () => {
+    const foundById = db.Teachers.find((t) => t.user_id === session.userId);
+    if (foundById) return foundById;
+    const sessEmail = String(session.email || session.username || '').toLowerCase();
+    return sessEmail
+      ? db.Teachers.find((t) => String(t.email || '').toLowerCase() === sessEmail) || null
+      : null;
+  };
+
+  switch (action) {
+    case 'auth.logout':
+      return { ok: true, status: 200, message: 'Logged out.' };
+
+    case 'dashboard.summary': {
+      if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        if (!own) return forbidden();
+        const linkedUser = db.Users_Auth.find((u) => u.id === own.user_id);
+        const enrichedOwn = {
+          ...own,
+          email: own.email || linkedUser?.email || linkedUser?.username || session.email || '',
+        };
+        const visiblePayrollIds = new Set(
+          db.Payrolls.filter((p) => p.status === 'approved' || p.status === 'paid').map((p) => p.id)
+        );
+        const mySlips = db.Payroll_Details.filter(
+          (d) => d.teacher_id === own.id && visiblePayrollIds.has(d.payroll_id)
+        );
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            role: 'guru',
+            teacher: enrichedOwn,
+            totalSlips: mySlips.length,
+            latestNetSalary: mySlips.length ? mySlips[mySlips.length - 1].net_salary : 0,
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          role: session.role,
+          totalTeachers: db.Teachers.length,
+          pendingApprovals: db.Payrolls.filter((p) => p.status === 'submitted').length,
+          paidPayrolls: db.Payrolls.filter((p) => p.status === 'paid').length,
+          totalPayrolls: db.Payrolls.length,
+        },
+      };
+    }
+
+    case 'teachers.list': {
+      if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        return { ok: true, status: 200, data: own ? [own] : [] };
+      }
+      const enriched = db.Teachers.map((t) => {
+        const linkedUser = db.Users_Auth.find((u) => u.id === t.user_id);
+        const email =
+          t.email ||
+          (linkedUser ? String(linkedUser.email || linkedUser.username || '') : '');
+        return {
+          ...t,
+          email,
+          salary_component: db.Salary_Components.find((c) => c.teacher_id === t.id) || null,
+        };
+      });
+      return { ok: true, status: 200, data: enriched };
+    }
+
+    case 'teachers.create': {
+      if (session.role !== 'admin') return forbidden();
+      const cleanEmail = String(payload.email || payload.username || '')
+        .trim()
+        .toLowerCase();
+
+      if (cleanEmail) {
+        const dup = db.Users_Auth.some(
+          (u) =>
+            String(u.email || u.username || '')
+              .trim()
+              .toLowerCase() === cleanEmail
+        );
+        if (dup) {
+          return {
+            ok: false,
+            status: 409,
+            error: `Alamat Gmail "${cleanEmail}" sudah digunakan oleh akun lain.`,
+          };
+        }
+      }
+
+      const userId = generateUuidV4();
+      if (cleanEmail) {
+        db.Users_Auth.push({
+          id: userId,
+          username: cleanEmail,
+          email: cleanEmail,
+          password_hash: 'GMAIL_AUTH',
+          role: 'guru',
+        });
+      }
+
+      const teacherId = generateUuidV4();
+      const newTeacher = {
+        id: teacherId,
+        user_id: userId,
+        nip: payload.nip,
+        name: payload.name,
+        status: payload.status || 'GTY (Guru Tetap Yayasan)',
+        bank_account: payload.bank_account,
+        email: cleanEmail,
+      };
+      db.Teachers.push(newTeacher);
+
+      const newComp = {
+        id: generateUuidV4(),
+        teacher_id: teacherId,
+        base_salary: Number(payload.base_salary || 0),
+        hourly_rate: Number(payload.hourly_rate || 0),
+        position_allowance: Number(payload.position_allowance || 0),
+        bpjs_deduction: Number(payload.bpjs_deduction || 0),
+        custom_components_json:
+          typeof payload.custom_components_json === 'string'
+            ? payload.custom_components_json
+            : JSON.stringify(payload.custom_components || []),
+      };
+      db.Salary_Components.push(newComp);
+      saveDb(db);
+      return { ok: true, status: 201, data: { ...newTeacher, salary_component: newComp } };
+    }
+
+    case 'teachers.update': {
+      if (session.role !== 'admin') return forbidden();
+      const idx = db.Teachers.findIndex((t) => t.id === payload.id);
+      if (idx === -1) return notFound();
+
+      const existingTeacher = db.Teachers[idx];
+      const nextEmail =
+        payload.email !== undefined || payload.username !== undefined
+          ? String(payload.email ?? payload.username ?? '')
+              .trim()
+              .toLowerCase()
+          : existingTeacher.email || '';
+
+      if (nextEmail) {
+        const conflictUser = db.Users_Auth.find(
+          (u) =>
+            u.id !== existingTeacher.user_id &&
+            String(u.email || u.username || '')
+              .trim()
+              .toLowerCase() === nextEmail
+        );
+        if (conflictUser) {
+          return {
+            ok: false,
+            status: 409,
+            error: `Alamat Gmail "${nextEmail}" sudah digunakan oleh akun lain.`,
+          };
+        }
+
+        const userIdx = db.Users_Auth.findIndex((u) => u.id === existingTeacher.user_id);
+        if (userIdx !== -1) {
+          db.Users_Auth[userIdx] = {
+            ...db.Users_Auth[userIdx],
+            username: nextEmail,
+            email: nextEmail,
+          };
+        } else {
+          const newUserId = existingTeacher.user_id || generateUuidV4();
+          existingTeacher.user_id = newUserId;
+          db.Users_Auth.push({
+            id: newUserId,
+            username: nextEmail,
+            email: nextEmail,
+            password_hash: 'GMAIL_AUTH',
+            role: 'guru',
+          });
+        }
+      }
+
+      db.Teachers[idx] = {
+        ...existingTeacher,
+        nip: payload.nip ?? existingTeacher.nip,
+        name: payload.name ?? existingTeacher.name,
+        status: payload.status ?? existingTeacher.status,
+        bank_account: payload.bank_account ?? existingTeacher.bank_account,
+        email: nextEmail,
+      };
+      const compIdx = db.Salary_Components.findIndex((c) => c.teacher_id === payload.id);
+      const nextCustomJson =
+        payload.custom_components_json !== undefined
+          ? payload.custom_components_json
+          : payload.custom_components !== undefined
+          ? JSON.stringify(payload.custom_components)
+          : undefined;
+      if (compIdx !== -1) {
+        db.Salary_Components[compIdx] = {
+          ...db.Salary_Components[compIdx],
+          base_salary: Number(payload.base_salary ?? db.Salary_Components[compIdx].base_salary),
+          hourly_rate: Number(payload.hourly_rate ?? db.Salary_Components[compIdx].hourly_rate),
+          position_allowance: Number(
+            payload.position_allowance ?? db.Salary_Components[compIdx].position_allowance
+          ),
+          bpjs_deduction: Number(payload.bpjs_deduction ?? db.Salary_Components[compIdx].bpjs_deduction),
+          custom_components_json:
+            nextCustomJson !== undefined
+              ? nextCustomJson
+              : db.Salary_Components[compIdx].custom_components_json || '[]',
+        };
+      }
+      saveDb(db);
+      return { ok: true, status: 200, data: db.Teachers[idx] };
+    }
+
+    case 'teachers.bulkImport': {
+      if (session.role !== 'admin') return forbidden();
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      let createdCount = 0;
+      let updatedCount = 0;
+
+      for (const item of items) {
+        const cleanNip = String(item.nip || '').trim();
+        const cleanName = String(item.name || '').trim();
+        const cleanBank = String(item.bank_account || '').trim();
+        const cleanEmail = String(item.email || item.username || '')
+          .trim()
+          .toLowerCase();
+        if (!cleanNip || !cleanName || !cleanBank) continue;
+
+        const existingTeacherIdx = db.Teachers.findIndex(
+          (t) => String(t.nip || '').trim().toLowerCase() === cleanNip.toLowerCase()
+        );
+
+        if (existingTeacherIdx !== -1) {
+          const existingTeacher = db.Teachers[existingTeacherIdx];
+          const targetId = existingTeacher.id;
+          const updatedEmail = cleanEmail || existingTeacher.email || '';
+
+          if (cleanEmail) {
+            const userIdx = db.Users_Auth.findIndex((u) => u.id === existingTeacher.user_id);
+            if (userIdx !== -1) {
+              db.Users_Auth[userIdx] = {
+                ...db.Users_Auth[userIdx],
+                username: cleanEmail,
+                email: cleanEmail,
+              };
+            } else {
+              const newUserId = existingTeacher.user_id || generateUuidV4();
+              existingTeacher.user_id = newUserId;
+              db.Users_Auth.push({
+                id: newUserId,
+                username: cleanEmail,
+                email: cleanEmail,
+                password_hash: 'GMAIL_AUTH',
+                role: 'guru',
+              });
+            }
+          }
+
+          db.Teachers[existingTeacherIdx] = {
+            ...existingTeacher,
+            nip: cleanNip,
+            name: cleanName,
+            status: item.status || existingTeacher.status,
+            bank_account: cleanBank,
+            email: updatedEmail,
+          };
+          const compIdx = db.Salary_Components.findIndex((c) => c.teacher_id === targetId);
+          if (compIdx !== -1) {
+            db.Salary_Components[compIdx] = {
+              ...db.Salary_Components[compIdx],
+              base_salary: Number(item.base_salary || 0),
+              hourly_rate: Number(item.hourly_rate || 0),
+              position_allowance: Number(item.position_allowance || 0),
+              bpjs_deduction: Number(item.bpjs_deduction || 0),
+            };
+          } else {
+            db.Salary_Components.push({
+              id: generateUuidV4(),
+              teacher_id: targetId,
+              base_salary: Number(item.base_salary || 0),
+              hourly_rate: Number(item.hourly_rate || 0),
+              position_allowance: Number(item.position_allowance || 0),
+              bpjs_deduction: Number(item.bpjs_deduction || 0),
+            });
+          }
+          updatedCount++;
+        } else {
+          const userId = generateUuidV4();
+          if (cleanEmail) {
+            const dup = db.Users_Auth.some(
+              (u) =>
+                String(u.email || u.username || '')
+                  .trim()
+                  .toLowerCase() === cleanEmail
+            );
+            if (!dup) {
+              db.Users_Auth.push({
+                id: userId,
+                username: cleanEmail,
+                email: cleanEmail,
+                password_hash: 'GMAIL_AUTH',
+                role: 'guru',
+              });
+            }
+          }
+          const teacherId = generateUuidV4();
+          db.Teachers.push({
+            id: teacherId,
+            user_id: userId,
+            nip: cleanNip,
+            name: cleanName,
+            status: item.status || 'GTY (Guru Tetap Yayasan)',
+            bank_account: cleanBank,
+            email: cleanEmail,
+          });
+          db.Salary_Components.push({
+            id: generateUuidV4(),
+            teacher_id: teacherId,
+            base_salary: Number(item.base_salary || 0),
+            hourly_rate: Number(item.hourly_rate || 0),
+            position_allowance: Number(item.position_allowance || 0),
+            bpjs_deduction: Number(item.bpjs_deduction || 0),
+          });
+          createdCount++;
+        }
+      }
+
+      saveDb(db);
+      return {
+        ok: true,
+        status: 200,
+        data: { createdCount, updatedCount, totalProcessed: createdCount + updatedCount },
+      };
+    }
+
+    case 'teachers.delete': {
+      if (session.role !== 'admin') return forbidden();
+      const targetTeacher = db.Teachers.find((t) => t.id === payload.id);
+      if (!targetTeacher) return notFound();
+      db.Teachers = db.Teachers.filter((t) => t.id !== payload.id);
+      db.Salary_Components = db.Salary_Components.filter((c) => c.teacher_id !== payload.id);
+      if (targetTeacher.user_id) {
+        db.Users_Auth = db.Users_Auth.filter(
+          (u) => !(u.id === targetTeacher.user_id && u.role === 'guru')
+        );
+      }
+      saveDb(db);
+      return { ok: true, status: 200, message: 'Data guru berhasil dihapus.' };
+    }
+
+    case 'attendances.list': {
+      let list = db.Attendances;
+      if (payload.month && payload.year) {
+        const targetKey = normalizePeriodKey(payload.month);
+        const targetYear = Number(payload.year);
+        const parsedPeriod = parsePeriodMonthKey(targetKey);
+
+        const directMatches = list.filter(
+          (a) => normalizePeriodKey(a.month) === targetKey && Number(a.year) === targetYear
+        );
+
+        if (parsedPeriod.isRange) {
+          const directTeacherIds = new Set(directMatches.map((a) => a.teacher_id));
+          const rangeSet = new Set(parsedPeriod.monthsInRange.map((m) => String(m)));
+          const aggregatedRows = [];
+
+          for (const t of db.Teachers) {
+            if (directTeacherIds.has(t.id)) continue;
+            const subRows = list.filter(
+              (a) =>
+                a.teacher_id === t.id &&
+                Number(a.year) === targetYear &&
+                rangeSet.has(normalizePeriodKey(a.month))
+            );
+            if (subRows.length > 0) {
+              aggregatedRows.push({
+                id: `agg_${t.id}_${targetKey}_${targetYear}`,
+                teacher_id: t.id,
+                month: targetKey,
+                year: targetYear,
+                present_days: subRows.reduce((s, r) => s + Number(r.present_days || 0), 0),
+                absent_days: subRows.reduce((s, r) => s + Number(r.absent_days || 0), 0),
+                total_jtm: subRows.reduce((s, r) => s + Number(r.total_jtm || 0), 0),
+              });
+            }
+          }
+          list = [...directMatches, ...aggregatedRows];
+        } else {
+          list = directMatches;
+        }
+      }
+      if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        if (!own) return forbidden();
+        list = list.filter((a) => a.teacher_id === own.id);
+      }
+      return { ok: true, status: 200, data: list };
+    }
+
+    case 'attendances.upsert': {
+      if (session.role !== 'admin') return forbidden();
+      const targetKey = normalizePeriodKey(payload.month);
+      const targetYear = Number(payload.year);
+      const existingIdx = db.Attendances.findIndex(
+        (a) =>
+          a.teacher_id === payload.teacher_id &&
+          normalizePeriodKey(a.month) === targetKey &&
+          Number(a.year) === targetYear
+      );
+      const storedMonth = /^\d+$/.test(targetKey) ? Number(targetKey) : targetKey;
+      const record = {
+        id: existingIdx !== -1 ? db.Attendances[existingIdx].id : generateUuidV4(),
+        teacher_id: payload.teacher_id,
+        month: storedMonth,
+        year: targetYear,
+        present_days: Number(payload.present_days || 0),
+        absent_days: Number(payload.absent_days || 0),
+        total_jtm: Number(payload.total_jtm || 0),
+      };
+      if (existingIdx !== -1) {
+        db.Attendances[existingIdx] = record;
+      } else {
+        db.Attendances.push(record);
+      }
+      saveDb(db);
+      return { ok: true, status: 200, data: record };
+    }
+
+    case 'payrolls.list': {
+      if (session.role === 'guru') return forbidden();
+      return { ok: true, status: 200, data: db.Payrolls };
+    }
+
+    case 'payrolls.generateDraft': {
+      if (session.role !== 'admin') return forbidden();
+      const targetKey = normalizePeriodKey(payload.month);
+      const storedMonth = /^\d+$/.test(targetKey) ? Number(targetKey) : targetKey;
+      const year = Number(payload.year);
+      const parsedPeriod = parsePeriodMonthKey(targetKey);
+      const rangeSet = new Set(parsedPeriod.monthsInRange.map((m) => String(m)));
+
+      const existing = db.Payrolls.find(
+        (p) => normalizePeriodKey(p.month) === targetKey && Number(p.year) === year
+      );
+      if (existing && existing.status !== 'draft') {
+        return {
+          ok: false,
+          status: 409,
+          error: 'Payroll periode ini sudah diajukan/disetujui dan terkunci.',
+        };
+      }
+      const payrollId = existing ? existing.id : generateUuidV4();
+      let totalBudget = 0;
+      const newDetails = db.Teachers.map((teacher) => {
+        const comp = db.Salary_Components.find((c) => c.teacher_id === teacher.id) || {
+          base_salary: 0,
+          hourly_rate: 0,
+          position_allowance: 0,
+          bpjs_deduction: 0,
+        };
+        let att = db.Attendances.find(
+          (a) =>
+            a.teacher_id === teacher.id &&
+            normalizePeriodKey(a.month) === targetKey &&
+            Number(a.year) === year
+        );
+        if (!att && parsedPeriod.isRange) {
+          const subRows = db.Attendances.filter(
+            (a) =>
+              a.teacher_id === teacher.id &&
+              Number(a.year) === year &&
+              rangeSet.has(normalizePeriodKey(a.month))
+          );
+          att = {
+            present_days: subRows.reduce((s, r) => s + Number(r.present_days || 0), 0),
+            absent_days: subRows.reduce((s, r) => s + Number(r.absent_days || 0), 0),
+            total_jtm: subRows.reduce((s, r) => s + Number(r.total_jtm || 0), 0),
+          };
+        }
+        if (!att) {
+          att = { present_days: 0, absent_days: 0, total_jtm: 0 };
+        }
+
+        const jtmHonor = Number(att.total_jtm) * Number(comp.hourly_rate);
+        let customComponents = [];
+        try {
+          customComponents = JSON.parse(comp.custom_components_json || '[]');
+          if (!Array.isArray(customComponents)) customComponents = [];
+        } catch {
+          customComponents = [];
+        }
+        const customAllowanceTotal = customComponents
+          .filter((c) => c.type === 'allowance')
+          .reduce((sum, c) => sum + Number(c.amount || 0), 0);
+        const customDeductionTotal = customComponents
+          .filter((c) => c.type !== 'allowance')
+          .reduce((sum, c) => sum + Number(c.amount || 0), 0);
+
+        const gross =
+          Number(comp.base_salary) +
+          jtmHonor +
+          Number(comp.position_allowance) +
+          customAllowanceTotal;
+        const net = Math.max(
+          0,
+          gross - Number(comp.bpjs_deduction) - customDeductionTotal
+        );
+        totalBudget += net;
+
+        return {
+          id: generateUuidV4(),
+          payroll_id: payrollId,
+          teacher_id: teacher.id,
+          net_salary: net,
+          details_json: JSON.stringify({
+            teacher_name: teacher.name,
+            nip: teacher.nip,
+            status: teacher.status,
+            bank_account: teacher.bank_account,
+            month: storedMonth,
+            year,
+            present_days: att.present_days,
+            absent_days: att.absent_days,
+            total_jtm: att.total_jtm,
+            base_salary: comp.base_salary,
+            hourly_rate: comp.hourly_rate,
+            jtm_honor: jtmHonor,
+            position_allowance: comp.position_allowance,
+            bpjs_deduction: comp.bpjs_deduction,
+            custom_components: customComponents,
+            custom_allowance_total: customAllowanceTotal,
+            custom_deduction_total: customDeductionTotal,
+            gross_salary: gross,
+            net_salary: net,
+          }),
+        };
+      });
+
+      if (existing) {
+        existing.total_budget = totalBudget;
+        existing.status = 'draft';
+        db.Payroll_Details = db.Payroll_Details.filter((d) => d.payroll_id !== payrollId);
+      } else {
+        db.Payrolls.push({
+          id: payrollId,
+          month: storedMonth,
+          year,
+          total_budget: totalBudget,
+          status: 'draft',
+        });
+      }
+      db.Payroll_Details.push(...newDetails);
+      saveDb(db);
+      return {
+        ok: true,
+        status: 200,
+        data: { id: payrollId, month: storedMonth, year, total_budget: totalBudget, status: 'draft' },
+      };
+    }
+
+    case 'payrolls.updateStatus': {
+      const target = db.Payrolls.find((p) => p.id === payload.id);
+      if (!target) return notFound();
+      const nextStatus = payload.status;
+      let allowed = false;
+      if (session.role === 'admin') {
+        if (target.status === 'draft' && nextStatus === 'submitted') allowed = true;
+        if (target.status === 'approved' && nextStatus === 'paid') allowed = true;
+      } else if (session.role === 'kepsek') {
+        if (target.status === 'submitted' && (nextStatus === 'approved' || nextStatus === 'draft')) {
+          allowed = true;
+        }
+      }
+      if (!allowed) return forbidden();
+      target.status = nextStatus;
+      saveDb(db);
+      return { ok: true, status: 200, data: target };
+    }
+
+    case 'payrollDetails.byPayroll': {
+      if (session.role !== 'admin' && session.role !== 'kepsek') return forbidden();
+      const rows = db.Payroll_Details.filter((d) => d.payroll_id === payload.payroll_id);
+      return { ok: true, status: 200, data: rows };
+    }
+
+    case 'payslips.myList': {
+      if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        if (!own) return forbidden();
+        const mySlips = db.Payroll_Details.filter((d) => d.teacher_id === own.id)
+          .map((d) => {
+            const parent = db.Payrolls.find((p) => p.id === d.payroll_id);
+            if (!parent || (parent.status !== 'approved' && parent.status !== 'paid')) return null;
+            return {
+              ...d,
+              month: parent.month,
+              year: parent.year,
+              payroll_status: parent.status,
+              teacher_name: own.name,
+              nip: own.nip,
+              bank_account: own.bank_account,
+            };
+          })
+          .filter(Boolean);
+        return { ok: true, status: 200, data: mySlips };
+      }
+      return forbidden();
+    }
+
+    case 'schoolProfile.update': {
+      if (session.role !== 'admin') return forbidden();
+      db.School_Profile = {
+        ...(db.School_Profile || {}),
+        ...payload,
+      };
+      saveDb(db);
+      return { ok: true, status: 200, data: db.School_Profile };
+    }
+
+    default:
+      return notFound();
+  }
+}

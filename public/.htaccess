@@ -1,0 +1,28 @@
+# Konfigurasi SPA & PWA untuk Shared Hosting (Apache / LiteSpeed)
+Options -Indexes
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Jangan ganggu folder validasi SSL (Let's Encrypt / AutoSSL)
+  RewriteCond %{REQUEST_URI} ^/\.well-known/ [NC]
+  RewriteRule ^ - [L]
+
+  # Layani file & folder statis secara langsung
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Arahkan seluruh rute SPA ke index.html
+  RewriteRule ^ index.html [L]
+</IfModule>
+
+# Pastikan Service Worker, Manifest PWA, dan index.html selalu cek versi terbaru
+<IfModule mod_headers.c>
+  <FilesMatch "^(index\.html|sw\.js|manifest\.webmanifest)$">
+    Header set Cache-Control "no-cache, no-store, must-revalidate"
+    Header set Pragma "no-cache"
+    Header set Expires 0
+  </FilesMatch>
+</IfModule>
