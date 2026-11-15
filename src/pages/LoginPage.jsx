@@ -25,21 +25,25 @@ const DEFAULT_DEMO_ACCOUNTS = [
     email: 'admin.sekolah@gmail.com',
     name: 'Admin / Bendahara',
     roleLabel: 'Bendahara Sekolah',
+    tone: 'nim-badge--accent',
   },
   {
     email: 'kepsek.sekolah@gmail.com',
     name: 'Kepala Sekolah',
     roleLabel: 'Otorisasi Kepsek',
+    tone: 'nim-badge--warn',
   },
   {
     email: 'budi.santoso@gmail.com',
     name: 'Budi Santoso, S.Pd., M.Pd.',
     roleLabel: 'Pendidik / Guru',
+    tone: 'nim-badge--good',
   },
   {
     email: 'siti.aisyah@gmail.com',
     name: 'Siti Aisyah, S.Si.',
     roleLabel: 'Pendidik / Guru',
+    tone: 'nim-badge--info',
   },
 ];
 
@@ -131,8 +135,8 @@ export function LoginPage({ onLoginSuccess }) {
           result?.user?.role === 'admin'
             ? 'Admin / Bendahara'
             : result?.user?.role === 'kepsek'
-            ? 'Kepala Sekolah'
-            : 'Pendidik / Guru',
+              ? 'Kepala Sekolah'
+              : 'Pendidik / Guru',
       });
       setRememberedAccounts(getRememberedGoogleAccounts());
       saveSession(result);
@@ -171,7 +175,7 @@ export function LoginPage({ onLoginSuccess }) {
     } catch (err) {
       notify.error(
         err.message ||
-          'Email tidak terdaftar atau gagal mengirim kode verifikasi. Pastikan Gmail Anda sudah didaftarkan oleh Admin.'
+        'Email tidak terdaftar atau gagal mengirim kode verifikasi. Pastikan Gmail Anda sudah didaftarkan oleh Admin.'
       );
     } finally {
       setLoading(false);
@@ -236,10 +240,16 @@ export function LoginPage({ onLoginSuccess }) {
   };
 
   return (
-    <div className="app-shell flex min-h-[calc(100vh-5rem)] items-center justify-center py-6">
-      <div className="fluid-container max-w-4xl items-stretch">
-        {/* Left Column: Institution Branding & Overview */}
-        <div className="fluid-item flex flex-col justify-between rounded-3xl bg-slate-900 p-6 sm:p-8 text-white shadow-xl">
+    <div className="flex min-h-[calc(100dvh-110px)] items-center justify-center py-4 sm:py-8">
+      <div className="fluid-container max-w-5xl items-stretch">
+        {/* Left Column: Frosted Glass Institution Hero */}
+        <div
+          className="fluid-item nim-glass rounded-[26px] p-6 sm:p-8 flex flex-col justify-between relative overflow-hidden"
+          style={{
+            background:
+              'radial-gradient(circle at top right, var(--accent-soft), transparent 55%), linear-gradient(160deg, var(--glass-hi), transparent 46%), var(--card)',
+          }}
+        >
           <div>
             <div className="flex items-center gap-3.5 mb-5">
               <img
@@ -248,57 +258,81 @@ export function LoginPage({ onLoginSuccess }) {
                 onError={(e) => {
                   e.currentTarget.src = '/logo.png';
                 }}
-                className="h-16 w-16 shrink-0 rounded-2xl object-contain bg-white/10 shadow-md border border-emerald-400/30"
+                className="h-16 w-16 shrink-0 rounded-2xl object-contain p-1"
+                style={{
+                  background: 'var(--card-3)',
+                  boxShadow: 'inset 0 0 0 1px var(--glass-rim)',
+                }}
               />
-              <div>
-                <div className="inline-flex items-center gap-2 rounded-full bg-emerald-500/20 px-3 py-1 text-xs font-semibold text-emerald-300 border border-emerald-400/30">
+              <div className="min-w-0">
+                <div className="nim-badge nim-badge--good">
                   <ShieldCheck className="h-3.5 w-3.5" />
                   <span>Verifikasi Akun Gmail</span>
                 </div>
-                <p className="mt-1 text-xs text-slate-400 font-medium tracking-wider uppercase">
+                <p className="mt-1.5 text-[11px] font-bold tracking-wider uppercase text-[var(--muted)] truncate">
                   {schoolProfile.foundation_name || 'SIPAYROLL • YAYASAN PENDIDIKAN'}
                 </p>
               </div>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+
+            <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-[var(--ink)] leading-tight">
               {schoolProfile.school_name || 'Sistem Penggajian Sekolah & Yayasan'}
             </h1>
-            <p className="mt-2 text-sm text-slate-300 leading-relaxed">
+            <p className="mt-3 text-sm text-[var(--muted)] leading-relaxed">
               Layanan pengelolaan gaji, rekapitulasi kehadiran, jam mengajar, serta tunjangan
               pendidik dan tenaga kependidikan secara transparan, akurat, dan terintegrasi.
             </p>
           </div>
 
-          <div className="mt-8 space-y-3 border-t border-slate-800 pt-5 text-xs text-slate-300">
-            <div className="flex items-center gap-2.5">
-              <span className="h-2 w-2 rounded-full bg-emerald-400" />
+          <div
+            className="mt-8 space-y-3 pt-5 text-xs text-[var(--ink-2)]"
+            style={{ borderTop: '1px solid var(--line)' }}
+          >
+            <div className="flex items-start gap-2.5">
+              <span
+                className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                style={{ background: 'var(--good)', boxShadow: '0 0 0 4px var(--good-soft)' }}
+              />
               <span>
-                <strong>Login Praktis via Gmail:</strong> Masuk menggunakan kode verifikasi 6 digit
-                yang dikirim otomatis ke kotak masuk Gmail Anda tanpa password
+                <strong className="text-[var(--ink)]">Login Praktis via Gmail:</strong> Masuk
+                menggunakan kode verifikasi 6 digit yang dikirim otomatis ke kotak masuk Gmail Anda
+                tanpa password.
               </span>
             </div>
-            <div className="flex items-center gap-2.5">
-              <span className="h-2 w-2 rounded-full bg-indigo-400" />
+            <div className="flex items-start gap-2.5">
+              <span
+                className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                style={{ background: 'var(--accent)', boxShadow: '0 0 0 4px var(--accent-soft)' }}
+              />
               <span>
-                <strong>Otorisasi Daftar Email Resmi:</strong> Hanya alamat Gmail yang didaftarkan
-                Admin Sekolah yang diizinkan mengakses sistem
+                <strong className="text-[var(--ink)]">Otorisasi Daftar Email Resmi:</strong> Hanya
+                alamat Gmail yang didaftarkan Admin Sekolah yang diizinkan mengakses sistem.
               </span>
             </div>
-            <div className="flex items-center gap-2.5">
-              <span className="h-2 w-2 rounded-full bg-amber-400" />
+            <div className="flex items-start gap-2.5">
+              <span
+                className="mt-1.5 h-2 w-2 shrink-0 rounded-full"
+                style={{ background: 'var(--warn)', boxShadow: '0 0 0 4px var(--warn-soft)' }}
+              />
               <span>
-                <strong>Slip Gaji Digital:</strong> Unduh bukti rincian penerimaan gaji resmi
-                berformat PDF
+                <strong className="text-[var(--ink)]">Slip Gaji Digital:</strong> Unduh bukti
+                rincian penerimaan gaji resmi berformat PDF.
               </span>
             </div>
           </div>
         </div>
 
-        {/* Right Column: Zero-Config Gmail Verification Login Card */}
-        <div className="fluid-item rounded-3xl border border-slate-200 bg-white p-6 sm:p-8 shadow-sm flex flex-col justify-between">
+        {/* Right Column: Frosted Glass Gmail Verification Login Card */}
+        <div className="fluid-item nim-glass rounded-[26px] p-6 sm:p-8 flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-3">
-              <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-indigo-50 border border-indigo-100 shadow-2xs">
+              <div
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl"
+                style={{
+                  background: 'var(--card-3)',
+                  boxShadow: 'inset 0 0 0 1px var(--glass-rim)',
+                }}
+              >
                 <svg className="h-5 w-5" viewBox="0 0 24 24" aria-hidden="true">
                   <path
                     fill="#4285F4"
@@ -319,8 +353,8 @@ export function LoginPage({ onLoginSuccess }) {
                 </svg>
               </div>
               <div>
-                <h2 className="text-lg font-bold text-slate-900">Masuk ke Portal</h2>
-                <p className="text-xs text-slate-500">
+                <h2 className="text-lg font-bold text-[var(--ink)]">Masuk ke Portal</h2>
+                <p className="text-xs text-[var(--muted)]">
                   {step === 'email'
                     ? 'Masukkan Akun Gmail yang terdaftar untuk menerima kode masuk'
                     : 'Masukkan kode verifikasi 6 digit dari kotak masuk Gmail Anda'}
@@ -332,7 +366,7 @@ export function LoginPage({ onLoginSuccess }) {
               <div className="mt-5 space-y-4">
                 {rememberedAccounts.length > 0 && (
                   <div className="space-y-1.5">
-                    <p className="text-[11px] font-semibold text-slate-500">
+                    <p className="text-[11px] font-semibold text-[var(--muted)]">
                       Akun Gmail yang pernah digunakan di perangkat ini:
                     </p>
                     <div className="flex flex-wrap gap-1.5">
@@ -348,19 +382,26 @@ export function LoginPage({ onLoginSuccess }) {
                               requestGmailOtp(acc.email);
                             }
                           }}
-                          className="group inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 pl-2 pr-1.5 py-1 text-[11px] hover:border-indigo-300 hover:bg-indigo-50/70 cursor-pointer transition-colors"
+                          className="group inline-flex items-center gap-2 rounded-full pl-1.5 pr-1.5 py-1 text-[11px] cursor-pointer transition-colors"
+                          style={{
+                            background: 'var(--card-2)',
+                            boxShadow: 'inset 0 0 0 1px var(--line-2)',
+                          }}
                         >
-                          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-indigo-600 text-[9px] font-bold text-white">
+                          <span
+                            className="flex h-5 w-5 items-center justify-center rounded-full text-[9px] font-bold"
+                            style={{ background: 'var(--accent)', color: 'var(--accent-ink)' }}
+                          >
                             {getInitials(acc.name || acc.email)}
                           </span>
-                          <span className="font-semibold text-slate-700 max-w-[175px] truncate">
+                          <span className="font-semibold text-[var(--ink-2)] max-w-[175px] truncate">
                             {acc.email}
                           </span>
                           <button
                             type="button"
                             title="Hapus akun dari perangkat"
                             onClick={(e) => handleRemoveRemembered(e, acc.email)}
-                            className="rounded-full p-0.5 text-slate-400 hover:bg-rose-100 hover:text-rose-600"
+                            className="rounded-full p-0.5 text-[var(--muted)] hover:text-[var(--bad-text)]"
                           >
                             <Trash2 className="h-3 w-3" />
                           </button>
@@ -372,17 +413,17 @@ export function LoginPage({ onLoginSuccess }) {
 
                 <form
                   onSubmit={handleRequestOtpSubmit}
-                  className="rounded-2xl border border-slate-200/90 bg-slate-50/70 p-4 sm:p-5 space-y-3.5"
+                  className="nim-card-well p-4 sm:p-5 space-y-3.5"
                 >
                   <div>
                     <label
                       htmlFor="login-gmail-input"
-                      className="block text-xs font-semibold text-slate-700"
+                      className="block text-xs font-semibold text-[var(--ink-2)]"
                     >
                       Alamat Akun Gmail Anda
                     </label>
                     <div className="relative mt-1.5">
-                      <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+                      <Mail className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--muted)]" />
                       <input
                         id="login-gmail-input"
                         type="email"
@@ -391,7 +432,7 @@ export function LoginPage({ onLoginSuccess }) {
                         value={emailInput}
                         onChange={(e) => setEmailInput(e.target.value)}
                         placeholder="nama.anda@gmail.com"
-                        className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3.5 py-2 text-xs sm:text-sm font-medium text-slate-900 focus:border-indigo-600 focus:outline-none"
+                        className="nim-input !pl-9"
                       />
                     </div>
                   </div>
@@ -399,7 +440,7 @@ export function LoginPage({ onLoginSuccess }) {
                   <button
                     type="submit"
                     disabled={loading}
-                    className="flex w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-60"
+                    className="nim-btn nim-btn--primary w-full"
                   >
                     {loading ? (
                       <>
@@ -414,8 +455,8 @@ export function LoginPage({ onLoginSuccess }) {
                     )}
                   </button>
 
-                  <div className="flex items-center justify-center gap-1.5 text-[10.5px] text-emerald-700 font-medium">
-                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                  <div className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-[var(--good-text)]">
+                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
                     <span>Langsung aktif tanpa pengaturan Client ID tambahan</span>
                   </div>
                 </form>
@@ -423,20 +464,24 @@ export function LoginPage({ onLoginSuccess }) {
             ) : (
               <form
                 onSubmit={handleVerifyOtpSubmit}
-                className="mt-5 rounded-2xl border border-indigo-200/80 bg-indigo-50/40 p-4 sm:p-5 space-y-4"
+                className="mt-5 rounded-2xl p-4 sm:p-5 space-y-4"
+                style={{
+                  background: 'var(--accent-soft)',
+                  boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+                }}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-wide text-indigo-700">
+                    <p className="text-[11px] font-bold uppercase tracking-wide text-[var(--accent-text)]">
                       Kode Terkirim ke Gmail
                     </p>
-                    <p className="text-xs font-bold text-slate-900 break-all">{activeEmail}</p>
+                    <p className="text-xs font-bold text-[var(--ink)] break-all">{activeEmail}</p>
                   </div>
                   <button
                     type="button"
                     disabled={loading}
                     onClick={handleBackToEmail}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                    className="nim-btn !min-h-[30px] !px-2.5 text-[11px]"
                   >
                     <ArrowLeft className="h-3 w-3" />
                     <span>Ganti Gmail</span>
@@ -444,7 +489,14 @@ export function LoginPage({ onLoginSuccess }) {
                 </div>
 
                 {simulationOtpHint && (
-                  <div className="flex items-center justify-between gap-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+                  <div
+                    className="flex items-center justify-between gap-2 rounded-xl px-3 py-2 text-[11px]"
+                    style={{
+                      background: 'var(--warn-soft)',
+                      color: 'var(--warn-text)',
+                      boxShadow: 'inset 0 0 0 1px var(--warn-line)',
+                    }}
+                  >
                     <span>
                       Kode Simulasi:{' '}
                       <strong className="font-mono text-xs tracking-wider">
@@ -454,7 +506,7 @@ export function LoginPage({ onLoginSuccess }) {
                     <button
                       type="button"
                       onClick={() => setOtpInput(simulationOtpHint)}
-                      className="rounded-lg bg-amber-200/80 px-2 py-0.5 text-[10.5px] font-bold text-amber-950 hover:bg-amber-300"
+                      className="nim-btn !min-h-[26px] !px-2 text-[10.5px]"
                     >
                       Isi Otomatis
                     </button>
@@ -464,12 +516,12 @@ export function LoginPage({ onLoginSuccess }) {
                 <div>
                   <label
                     htmlFor="login-otp-input"
-                    className="block text-xs font-semibold text-slate-700"
+                    className="block text-xs font-semibold text-[var(--ink-2)]"
                   >
                     Kode Verifikasi (6 Digit)
                   </label>
                   <div className="relative mt-1.5">
-                    <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-indigo-500" />
+                    <KeyRound className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--accent-text)]" />
                     <input
                       id="login-otp-input"
                       type="text"
@@ -481,10 +533,10 @@ export function LoginPage({ onLoginSuccess }) {
                       value={otpInput}
                       onChange={(e) => setOtpInput(e.target.value.replace(/\D/g, '').slice(0, 6))}
                       placeholder="000000"
-                      className="w-full rounded-xl border border-slate-300 bg-white pl-9 pr-3.5 py-2 text-center font-mono text-base font-bold tracking-[0.35em] text-slate-900 focus:border-indigo-600 focus:outline-none"
+                      className="nim-input !pl-9 text-center font-mono text-base font-bold tracking-[0.35em]"
                     />
                   </div>
-                  <p className="mt-1.5 text-[11px] text-slate-500">
+                  <p className="mt-1.5 text-[11px] text-[var(--muted)]">
                     Periksa kotak masuk atau folder Spam pada Gmail Anda. Kode berlaku selama 5
                     menit.
                   </p>
@@ -495,7 +547,7 @@ export function LoginPage({ onLoginSuccess }) {
                     type="button"
                     disabled={loading || resendCooldown > 0}
                     onClick={() => requestGmailOtp(activeEmail)}
-                    className="rounded-lg px-2.5 py-1.5 text-[11px] font-semibold text-indigo-700 hover:bg-indigo-100/70 disabled:text-slate-400 disabled:hover:bg-transparent"
+                    className="nim-btn text-[11px]"
                   >
                     {resendCooldown > 0
                       ? `Kirim Ulang (${resendCooldown}d)`
@@ -505,7 +557,7 @@ export function LoginPage({ onLoginSuccess }) {
                   <button
                     type="submit"
                     disabled={loading}
-                    className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-indigo-600 px-4 py-2 text-xs font-semibold text-white shadow-xs hover:bg-indigo-700 disabled:opacity-60"
+                    className="nim-btn nim-btn--primary"
                   >
                     {loading ? (
                       <>
@@ -523,32 +575,30 @@ export function LoginPage({ onLoginSuccess }) {
 
           {/* Quick Role Switcher for Demo / Simulation */}
           {!liveMode && (
-            <div className="mt-6 border-t border-slate-100 pt-5">
-              <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600">
-                <Sparkles className="h-4 w-4 text-amber-500" />
+            <div className="mt-6 pt-5" style={{ borderTop: '1px solid var(--line)' }}>
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--muted)]">
+                <Sparkles className="h-4 w-4 text-[var(--warn)]" />
                 <span>Akses Cepat Akun Terdaftar (Mode Simulasi):</span>
               </div>
               <div className="fluid-container mt-3 gap-2">
-                {DEFAULT_DEMO_ACCOUNTS.map((acc, idx) => {
-                  const colorClasses = [
-                    'border-indigo-200 bg-indigo-50/70 hover:bg-indigo-100 text-indigo-900',
-                    'border-amber-200 bg-amber-50/70 hover:bg-amber-100 text-amber-900',
-                    'border-emerald-200 bg-emerald-50/70 hover:bg-emerald-100 text-emerald-900',
-                    'border-teal-200 bg-teal-50/70 hover:bg-teal-100 text-teal-900',
-                  ][idx % 4];
-                  return (
-                    <button
-                      key={acc.email}
-                      type="button"
-                      disabled={loading}
-                      onClick={() => handleQuickDemoLogin(acc)}
-                      className={`fluid-item-xs rounded-xl border px-3 py-2 text-left text-xs ${colorClasses}`}
-                    >
-                      <span className="block font-bold">{acc.name}</span>
-                      <span className="text-[11px] opacity-80 truncate block">{acc.email}</span>
-                    </button>
-                  );
-                })}
+                {DEFAULT_DEMO_ACCOUNTS.map((acc) => (
+                  <button
+                    key={acc.email}
+                    type="button"
+                    disabled={loading}
+                    onClick={() => handleQuickDemoLogin(acc)}
+                    className="fluid-item-xs rounded-xl px-3 py-2 text-left text-xs transition-colors"
+                    style={{
+                      background: 'var(--card-2)',
+                      boxShadow: 'inset 0 0 0 1px var(--line-2)',
+                    }}
+                  >
+                    <span className="block font-bold text-[var(--ink)]">{acc.name}</span>
+                    <span className="text-[11px] text-[var(--muted)] truncate block">
+                      {acc.email}
+                    </span>
+                  </button>
+                ))}
               </div>
             </div>
           )}

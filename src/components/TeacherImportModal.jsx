@@ -50,25 +50,20 @@ const SAMPLE_ROWS = [
   ],
 ];
 
-/**
- * Generates and downloads an official Microsoft Excel (.xlsx) Template file
- * for bulk importing Teachers, Salary Components, and Gmail Portal Access.
- */
 export function downloadTeacherImportTemplate() {
   const worksheetData = [TEMPLATE_HEADERS, ...SAMPLE_ROWS];
   const worksheet = XLSX.utils.aoa_to_sheet(worksheetData);
 
-  // Set readable column widths in Excel
   worksheet['!cols'] = [
-    { wch: 18 }, // nip
-    { wch: 26 }, // name
-    { wch: 26 }, // status
-    { wch: 22 }, // bank_account
-    { wch: 15 }, // base_salary
-    { wch: 14 }, // hourly_rate
-    { wch: 18 }, // position_allowance
-    { wch: 15 }, // bpjs_deduction
-    { wch: 28 }, // email (Gmail)
+    { wch: 18 },
+    { wch: 26 },
+    { wch: 26 },
+    { wch: 22 },
+    { wch: 15 },
+    { wch: 14 },
+    { wch: 18 },
+    { wch: 15 },
+    { wch: 28 },
   ];
 
   const workbook = XLSX.utils.book_new();
@@ -76,9 +71,6 @@ export function downloadTeacherImportTemplate() {
   XLSX.writeFile(workbook, 'Template_Import_Guru_SIPAYROLL.xlsx');
 }
 
-/**
- * Parses 2D array rows extracted from an Excel (.xlsx) sheet into validated teacher objects.
- */
 function parseTeacherSheetRows(rawRows, existingTeachers = []) {
   if (!Array.isArray(rawRows) || rawRows.length < 2) return [];
 
@@ -248,23 +240,33 @@ export function TeacherImportModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 overflow-y-auto"
+      className="nim-backdrop"
       role="dialog"
       aria-modal="true"
       aria-labelledby="import-teacher-modal-title"
     >
-      <div className="w-full max-w-3xl rounded-2xl bg-white p-5 sm:p-6 shadow-2xl border border-slate-100 my-auto max-h-[92vh] flex flex-col">
+      <div className="nim-panel nim-modal w-full max-w-3xl p-5 sm:p-6 my-auto max-h-[92vh] flex flex-col">
         {/* Header */}
-        <div className="flex items-start justify-between gap-3 border-b border-slate-100 pb-3 shrink-0">
+        <div
+          className="flex items-start justify-between gap-3 pb-3 shrink-0"
+          style={{ borderBottom: '1px solid var(--line)' }}
+        >
           <div className="flex items-center gap-3">
-            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-emerald-50 text-emerald-600">
-              <FileSpreadsheet className="h-6 w-6" />
+            <div
+              className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl"
+              style={{
+                background: 'var(--good-soft)',
+                color: 'var(--good-text)',
+                boxShadow: 'inset 0 0 0 1px var(--good-line)',
+              }}
+            >
+              <FileSpreadsheet className="h-5 w-5" />
             </div>
             <div>
-              <h3 id="import-teacher-modal-title" className="text-lg font-bold text-slate-900">
-                Import Master Data Guru & Komponen Gaji (.XLSX)
+              <h3 id="import-teacher-modal-title" className="text-base sm:text-lg font-bold text-[var(--ink)]">
+                Import Master Data Guru &amp; Komponen Gaji (.XLSX)
               </h3>
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-[var(--muted)]">
                 Unggah file Microsoft Excel (.xlsx) untuk menambahkan atau memperbarui data Guru,
                 Komponen Gaji, serta alamat Akun Gmail secara masal.
               </p>
@@ -275,28 +277,34 @@ export function TeacherImportModal({
             onClick={onClose}
             disabled={importing}
             aria-label="Tutup modal import"
-            className="touch-target flex items-center justify-center rounded-xl text-slate-400 hover:bg-slate-100"
+            className="nim-ibtn"
           >
-            <X className="h-5 w-5" />
+            <X className="h-4 w-4" />
           </button>
         </div>
 
         {/* Scrollable Content */}
         <div className="mt-4 space-y-4 overflow-y-auto pr-1 flex-1">
           {/* Step 1: Download Template */}
-          <div className="rounded-2xl border border-indigo-100 bg-indigo-50/50 p-4">
+          <div
+            className="rounded-2xl p-4"
+            style={{
+              background: 'var(--accent-soft)',
+              boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+            }}
+          >
             <div className="fluid-container items-center justify-between">
               <div className="fluid-item">
-                <span className="inline-block rounded-md bg-indigo-600 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-white">
+                <span className="nim-badge nim-badge--accent">
                   Langkah 1 • Format Import Excel
                 </span>
-                <h4 className="mt-1 text-sm font-bold text-slate-900">
+                <h4 className="mt-1.5 text-sm font-bold text-[var(--ink)]">
                   Unduh Template Format Import (.XLSX)
                 </h4>
-                <p className="mt-0.5 text-xs text-slate-600">
+                <p className="mt-0.5 text-xs text-[var(--ink-2)]">
                   Cukup isi data profil guru, nominal komponen gaji, dan alamat Gmail pada kolom{' '}
-                  <code className="font-semibold text-indigo-800">email</code> (tanpa perlu
-                  username & password).
+                  <code className="font-bold text-[var(--accent-text)]">email</code> (tanpa perlu
+                  username &amp; password).
                 </p>
               </div>
 
@@ -307,7 +315,7 @@ export function TeacherImportModal({
                     downloadTeacherImportTemplate();
                     notify.info('Template Excel (.xlsx) berhasil diunduh.');
                   }}
-                  className="touch-target flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white shadow-2xs hover:bg-indigo-700"
+                  className="nim-btn nim-btn--primary"
                 >
                   <FileDown className="h-3.5 w-3.5" />
                   <span>Unduh Template Excel (.XLSX)</span>
@@ -315,14 +323,17 @@ export function TeacherImportModal({
               </div>
             </div>
 
-            <div className="mt-3 rounded-xl bg-white/90 border border-indigo-100 p-2.5 text-[11px] text-slate-600 font-mono overflow-x-auto">
+            <div className="nim-card-well mt-3 p-2.5 text-[11px] text-[var(--muted)] font-mono overflow-x-auto">
               Kolom: nip | name | status | bank_account | base_salary | hourly_rate |
               position_allowance | bpjs_deduction | email (Alamat Gmail)
             </div>
           </div>
 
           {/* Step 2: Upload XLSX File */}
-          <div className="rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50/70 p-5 text-center">
+          <div
+            className="nim-card-well p-5 text-center"
+            style={{ border: '2px dashed var(--line-2)' }}
+          >
             <input
               ref={fileInputRef}
               type="file"
@@ -330,24 +341,26 @@ export function TeacherImportModal({
               onChange={handleFileChange}
               className="hidden"
             />
-            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-indigo-100 text-indigo-600">
-              <Upload className="h-6 w-6" />
+            <div className="nim-kpi__ico mx-auto !w-12 !h-12 !rounded-2xl">
+              <Upload className="h-5 w-5" />
             </div>
-            <p className="mt-2 text-sm font-bold text-slate-900">
+            <p className="mt-2.5 text-sm font-bold text-[var(--ink)]">
               {fileName ? `File Terpilih: ${fileName}` : 'Pilih File Excel (.XLSX) Master Guru & Gaji'}
             </p>
-            <p className="mt-1 text-xs text-slate-500">
-              Jika NIP sudah terdaftar, data guru, komponen gaji, & akun Gmail akan diperbarui otomatis.
+            <p className="mt-1 text-xs text-[var(--muted)]">
+              Jika NIP sudah terdaftar, data guru, komponen gaji, &amp; akun Gmail akan diperbarui otomatis.
             </p>
             <div className="mt-3 flex justify-center">
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
                 disabled={importing}
-                className="touch-target flex items-center gap-2 rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-semibold text-white hover:bg-slate-800"
+                className="nim-btn nim-btn--primary"
               >
                 <Upload className="h-4 w-4" />
-                <span>{fileName ? 'Ganti File Excel (.XLSX)' : 'Pilih File Excel (.XLSX) dari Perangkat'}</span>
+                <span>
+                  {fileName ? 'Ganti File Excel (.XLSX)' : 'Pilih File Excel (.XLSX) dari Perangkat'}
+                </span>
               </button>
             </div>
           </div>
@@ -357,8 +370,8 @@ export function TeacherImportModal({
             <div className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-600" />
-                  <span className="text-xs font-bold text-slate-800">
+                  <CheckCircle2 className="h-4 w-4 text-[var(--good-text)]" />
+                  <span className="text-xs font-bold text-[var(--ink)]">
                     Pratinjau Data Import ({formatRibuan(validRows.length)} Valid
                     {invalidRows.length > 0 ? `, ${formatRibuan(invalidRows.length)} Tidak Valid` : ''})
                   </span>
@@ -370,7 +383,7 @@ export function TeacherImportModal({
                     setFileName('');
                     if (fileInputRef.current) fileInputRef.current.value = '';
                   }}
-                  className="touch-target rounded-xl px-3 py-1.5 text-xs font-semibold text-rose-600 hover:bg-rose-50"
+                  className="nim-btn nim-btn--danger !min-h-[30px] !px-2.5 text-xs"
                 >
                   Bersihkan Pratinjau
                 </button>
@@ -380,21 +393,21 @@ export function TeacherImportModal({
                 {parsedRows.map((row) => (
                   <div
                     key={row.rowNumber}
-                    className={`rounded-xl border p-3 text-xs ${
-                      row.isValid
-                        ? 'border-slate-200 bg-white'
-                        : 'border-rose-300 bg-rose-50/60 text-rose-900'
-                    }`}
+                    className="rounded-xl p-3 text-xs"
+                    style={{
+                      background: row.isValid ? 'var(--card-2)' : 'var(--bad-soft)',
+                      boxShadow: row.isValid
+                        ? 'inset 0 0 0 1px var(--line)'
+                        : 'inset 0 0 0 1px var(--bad-line)',
+                    }}
                   >
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded bg-slate-100 px-2 py-0.5 font-mono text-[11px] font-semibold text-slate-700">
-                          Baris #{row.rowNumber}
-                        </span>
-                        <span className="font-bold text-slate-900">{row.name || '(Tanpa Nama)'}</span>
-                        <span className="text-slate-500">NIP: {row.nip || '-'}</span>
+                        <span className="nim-badge font-mono">Baris #{row.rowNumber}</span>
+                        <span className="font-bold text-[var(--ink)]">{row.name || '(Tanpa Nama)'}</span>
+                        <span className="text-[var(--muted)]">NIP: {row.nip || '-'}</span>
                         {row.email && (
-                          <span className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                          <span className="nim-badge nim-badge--accent">
                             <Mail className="h-3 w-3" />
                             {row.email}
                           </span>
@@ -403,44 +416,45 @@ export function TeacherImportModal({
 
                       {row.isValid ? (
                         <span
-                          className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold uppercase ${
-                            row.mode === 'update'
-                              ? 'bg-amber-100 text-amber-800'
-                              : 'bg-emerald-100 text-emerald-800'
+                          className={`nim-badge uppercase ${
+                            row.mode === 'update' ? 'nim-badge--warn' : 'nim-badge--good'
                           }`}
                         >
                           {row.mode === 'update' ? 'Update Data (NIP Sama)' : 'Guru Baru'}
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full bg-rose-100 px-2.5 py-0.5 text-[10px] font-bold text-rose-700">
+                        <span className="nim-badge nim-badge--bad">
                           <AlertCircle className="h-3 w-3" /> {row.errorReason}
                         </span>
                       )}
                     </div>
 
                     {row.isValid && (
-                      <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 rounded-lg bg-slate-50 p-2 text-[11px]">
+                      <div
+                        className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2 rounded-lg p-2 text-[11px]"
+                        style={{ background: 'var(--card-2)' }}
+                      >
                         <div>
-                          <span className="text-slate-500 block">Gaji Pokok</span>
-                          <span className="font-bold text-slate-900">
+                          <span className="text-[var(--muted)] block">Gaji Pokok</span>
+                          <span className="font-bold text-[var(--ink)] tabular-nums">
                             {formatRupiah(row.base_salary)}
                           </span>
                         </div>
                         <div>
-                          <span className="text-slate-500 block">Tarif / JTM</span>
-                          <span className="font-bold text-indigo-700">
+                          <span className="text-[var(--muted)] block">Tarif / JTM</span>
+                          <span className="font-bold text-[var(--accent-text)] tabular-nums">
                             {formatRupiah(row.hourly_rate)}
                           </span>
                         </div>
                         <div>
-                          <span className="text-slate-500 block">Tunjangan</span>
-                          <span className="font-bold text-slate-900">
+                          <span className="text-[var(--muted)] block">Tunjangan</span>
+                          <span className="font-bold text-[var(--ink)] tabular-nums">
                             {formatRupiah(row.position_allowance)}
                           </span>
                         </div>
                         <div>
-                          <span className="text-slate-500 block">Potongan BPJS</span>
-                          <span className="font-bold text-rose-600">
+                          <span className="text-[var(--muted)] block">Potongan BPJS</span>
+                          <span className="font-bold text-[var(--bad-text)] tabular-nums">
                             - {formatRupiah(row.bpjs_deduction)}
                           </span>
                         </div>
@@ -454,12 +468,15 @@ export function TeacherImportModal({
         </div>
 
         {/* Footer Actions */}
-        <div className="fluid-container mt-4 pt-3 border-t border-slate-100 shrink-0 gap-2">
+        <div
+          className="fluid-container mt-4 pt-3 shrink-0 gap-2"
+          style={{ borderTop: '1px solid var(--line)' }}
+        >
           <button
             type="button"
             onClick={onClose}
             disabled={importing}
-            className="fluid-item-xs touch-target rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+            className="fluid-item-xs nim-btn"
           >
             Batal
           </button>
@@ -468,7 +485,7 @@ export function TeacherImportModal({
             type="button"
             onClick={handleExecuteImport}
             disabled={importing || validRows.length === 0}
-            className="fluid-item-xs touch-target flex items-center justify-center gap-1.5 rounded-lg bg-emerald-600 px-3 py-2 text-xs font-semibold text-white shadow-xs hover:bg-emerald-700 disabled:opacity-50"
+            className="fluid-item-xs nim-btn nim-btn--good"
           >
             {importing ? (
               <>

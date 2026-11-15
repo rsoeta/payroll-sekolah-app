@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="id">
+<html lang="id" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0" />
-    <meta name="theme-color" content="#19381f" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#050a18" />
     <meta
       name="description"
       content="SIPAYROLL — Sistem Informasi Penggajian Sekolah & Yayasan Terpadu dengan pengelolaan kehadiran, tunjangan, dan Slip Gaji Digital PDF."
@@ -48,15 +48,42 @@
 
     <title>SIPAYROLL — Sistem Penggajian Sekolah & Yayasan</title>
 
-    <!-- Google Font: Outfit (Designed by Smartsheet Inc, Rodrigo Fuenzalida) -->
+    <!-- Google Fonts: Urbanist & Outfit -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Outfit:wght@400..700&family=Urbanist:wght@400..700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      (function (doc) {
+        doc.classList.add('js');
+        var width = window.innerWidth;
+        try {
+          var rawTheme = localStorage.getItem('sipayroll:theme');
+          var theme = rawTheme ? JSON.parse(rawTheme) : 'dark';
+          var resolved =
+            theme === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : theme === 'light'
+              ? 'light'
+              : 'dark';
+          doc.dataset.theme = resolved;
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', resolved === 'dark' ? '#050a18' : '#e9eef8');
+          if (localStorage.getItem('sipayroll:rail') === '1' && width > 760) {
+            doc.classList.add('is-rail');
+          }
+        } catch (e) {}
+        if (width > 760 && width < 1280) {
+          doc.classList.add('is-rail');
+        }
+      })(document.documentElement);
+    </script>
   </head>
-  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-indigo-600 selection:text-white">
+  <body class="antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
