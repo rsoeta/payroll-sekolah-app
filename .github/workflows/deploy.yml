@@ -1,4 +1,4 @@
-name: Deploy SIPAYROLL ke Shared Hosting
+name: Build & Siapkan Branch Production (Pull dari Terminal)
 
 on:
   push:
@@ -6,13 +6,16 @@ on:
       - main
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
-  group: deploy-shared-hosting-${{ github.ref }}
+  group: build-production-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build-and-deploy:
-    name: Build Vite & Upload via FTP/FTPS
+  build-production:
+    name: Build Vite & Update Branch production
     runs-on: ubuntu-latest
 
     steps:
@@ -33,13 +36,28 @@ jobs:
           VITE_GAS_API_URL: ${{ secrets.VITE_GAS_API_URL }}
         run: npm run build
 
-      - name: Deploy dist/ ke Shared Hosting
-        uses: SamKirkland/FTP-Deploy-Action@v4.3.5
-        with:
-          server: ${{ secrets.FTP_SERVER }}
-          username: ${{ secrets.FTP_USERNAME }}
-          password: ${{ secrets.FTP_PASSWORD }}
-          protocol: ${{ vars.FTP_PROTOCOL || 'ftps' }}
-          security: loose
-          local-dir: ./dist/
-          server-dir: ${{ secrets.FTP_SERVER_DIR || './' }}
+      - name: Publish Hasil Build (dist/) ke Branch production
+        run: |
+          set -e
+          mkdir -p _deploy
+          if git ls-remote --exit-code --heads origin production >/dev/null 2>&1; then
+            git clone --depth 1 --branch production "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git" _deploy
+          else
+            git -C _deploy init
+            git -C _deploy checkout -b production
+            git -C _deploy remote add origin "https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git"
+          fi
+
+          find _deploy -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -a dist/. _deploy/
+
+          cd _deploy
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Tidak ada perubahan pada hasil build."
+          else
+            git commit -m "Build produksi dari ${{ github.sha }}"
+            git push -u origin production
+          fi
