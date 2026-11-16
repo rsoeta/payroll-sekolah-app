@@ -14,13 +14,50 @@ import api from '../services/gasApi';
 import notify from '../utils/notify';
 import {
   formatRupiah,
+  getStaffCategoryLabel,
   parseCustomComponents,
   getMonthName,
   resolveInfaqZakatAmount,
 } from '../utils/formatters';
+import { formatAttendanceNumber } from '../utils/attendanceHelpers';
 import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
 import FloatingTabBar from '../components/FloatingTabBar';
 import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
+
+const SLIP_STATUS_META = {
+  draft: {
+    badgeLabel: 'Draf Kalkulasi Bendahara',
+    badgeCls: 'nim-badge',
+    isEstimate: true,
+    netLabel: 'Estimasi Gaji Bersih (Net)',
+    btnLabel: 'Unduh Pratinjau Slip (Draf PDF)',
+    note: 'Hasil kalkulasi sementara Admin/Bendahara — menunggu pengajuan & persetujuan Kepala Sekolah.',
+  },
+  submitted: {
+    badgeLabel: 'Menunggu Otorisasi Kepsek',
+    badgeCls: 'nim-badge nim-badge--warn',
+    isEstimate: true,
+    netLabel: 'Estimasi Gaji Bersih (Net)',
+    btnLabel: 'Unduh Pratinjau Slip (Estimasi PDF)',
+    note: 'Telah diajukan Bendahara dan sedang menunggu persetujuan Kepala Sekolah.',
+  },
+  approved: {
+    badgeLabel: 'Disetujui Kepsek',
+    badgeCls: 'nim-badge nim-badge--accent',
+    isEstimate: false,
+    netLabel: 'Gaji Bersih (Take Home Pay)',
+    btnLabel: 'Unduh Slip Gaji Resmi (PDF)',
+    note: null,
+  },
+  paid: {
+    badgeLabel: 'Sudah Dibayarkan',
+    badgeCls: 'nim-badge nim-badge--good',
+    isEstimate: false,
+    netLabel: 'Gaji Bersih (Take Home Pay)',
+    btnLabel: 'Unduh Slip Gaji Resmi (PDF)',
+    note: null,
+  },
+};
 
 export function GuruDashboard({
   user,
@@ -101,10 +138,18 @@ export function GuruDashboard({
 
   const handleDownloadPdf = (slip) => {
     downloadPayslipPdf(slip);
-    notify.success(`Slip Gaji ${getMonthName(slip.month)} ${slip.year} berhasil diunduh (PDF).`);
+    const meta = SLIP_STATUS_META[slip.payroll_status] || SLIP_STATUS_META.approved;
+    notify.success(
+      `${meta.isEstimate ? 'Pratinjau Estimasi Slip' : 'Slip Gaji'} ${getMonthName(
+        slip.month
+      )} ${slip.year} berhasil diunduh (PDF).`
+    );
   };
 
   const teacherProfile = summary?.teacher || {};
+  const latestEstimateSlip = slips.find(
+    (s) => s.payroll_status === 'draft' || s.payroll_status === 'submitted'
+  );
 
   const headerMeta =
     activeTab === 'attendance'
@@ -206,11 +251,35 @@ export function GuruDashboard({
             </div>
           </div>
 
-          <div className="nim-card-well px-4 py-3.5 min-w-[200px]">
-            <span className="nim-kpi__label block">Gaji Bersih Terakhir</span>
-            <span className="mt-1 block text-xl font-bold text-[var(--good-text)] tabular-nums">
-              {formatRupiah(summary?.latestNetSalary || 0)}
-            </span>
+          <div className="flex flex-wrap items-stretch gap-2.5">
+            {latestEstimateSlip && (
+              <div
+                className="nim-card-well px-4 py-3 min-w-[200px]"
+                style={{
+                  background: 'var(--accent-soft)',
+                  boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+                }}
+              >
+                <span className="nim-kpi__label block">
+                  Estimasi Gaji Bersih ({getMonthName(latestEstimateSlip.month)})
+                </span>
+                <span className="mt-1 block text-lg sm:text-xl font-bold text-[var(--accent-text)] tabular-nums">
+                  {formatRupiah(latestEstimateSlip.net_salary || 0)}
+                </span>
+                <span className="mt-0.5 block text-[10.5px] text-[var(--muted)]">
+                  {SLIP_STATUS_META[latestEstimateSlip.payroll_status]?.badgeLabel}
+                </span>
+              </div>
+            )}
+            <div className="nim-card-well px-4 py-3 min-w-[190px]">
+              <span className="nim-kpi__label block">Gaji Bersih Terakhir (Sah)</span>
+              <span className="mt-1 block text-lg sm:text-xl font-bold text-[var(--good-text)] tabular-nums">
+                {formatRupiah(summary?.latestNetSalary || 0)}
+              </span>
+              <span className="mt-0.5 block text-[10.5px] text-[var(--muted)]">
+                {getStaffCategoryLabel(teacherProfile)}
+              </span>
+            </div>
           </div>
         </div>
       </motion.section>
@@ -248,21 +317,22 @@ export function GuruDashboard({
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-base sm:text-lg font-bold text-[var(--ink)]">
-              Daftar Slip Gaji Terbit
+              Rincian Slip Gaji &amp; Estimasi Gaji Bersih
             </h2>
             <p className="text-xs text-[var(--muted)]">
-              Menampilkan slip gaji pribadi yang telah disetujui Kepala Sekolah / dibayarkan.
+              Menampilkan rincian kalkulasi sementara (Estimasi Net) dari Admin/Bendahara maupun
+              slip gaji resmi yang telah disetujui / dibayarkan.
             </p>
           </div>
         </div>
 
         {loading ? (
           <div className="nim-glass nim-card p-8 text-center text-sm text-[var(--muted)]">
-            Memuat riwayat slip gaji Anda...
+            Memuat riwayat rincian gaji Anda...
           </div>
         ) : slips.length === 0 ? (
           <div className="nim-glass nim-card p-8 text-center text-sm text-[var(--muted)]">
-            Belum ada slip gaji yang diterbitkan untuk akun Anda.
+            Belum ada kalkulasi atau slip gaji yang dibuat Admin/Bendahara untuk akun Anda.
           </div>
         ) : (
           <div className="fluid-container">
@@ -273,6 +343,7 @@ export function GuruDashboard({
               } catch {
                 d = {};
               }
+              const statusMeta = SLIP_STATUS_META[slip.payroll_status] || SLIP_STATUS_META.approved;
 
               return (
                 <div
@@ -281,7 +352,7 @@ export function GuruDashboard({
                 >
                   <div className="space-y-3">
                     <div
-                      className="flex items-center justify-between pb-3"
+                      className="flex items-center justify-between gap-2 pb-3"
                       style={{ borderBottom: '1px solid var(--line)' }}
                     >
                       <div className="flex items-center gap-2.5">
@@ -292,17 +363,28 @@ export function GuruDashboard({
                           <h3 className="text-base font-bold text-[var(--ink)]">
                             {getMonthName(slip.month)} {slip.year}
                           </h3>
-                          <p className="text-xs text-[var(--muted)]">
-                            Hadir: {d.present_days || 0} hr • Alpa: {d.absent_days || 0} hr • JTM:{' '}
-                            {d.total_jtm || 0} jam
+                          <p className="text-xs text-[var(--muted)] tabular-nums">
+                            Hadir: {formatAttendanceNumber(d.present_days || 0)} hr • Tidak Hadir:{' '}
+                            {formatAttendanceNumber(d.absent_days || 0)} hr • JTM:{' '}
+                            {formatAttendanceNumber(d.total_jtm || 0)} jam
                           </p>
                         </div>
                       </div>
 
-                      <span className="nim-badge nim-badge--good">
-                        {slip.payroll_status === 'paid' ? 'Dibayarkan' : 'Disetujui'}
-                      </span>
+                      <span className={statusMeta.badgeCls}>{statusMeta.badgeLabel}</span>
                     </div>
+
+                    {statusMeta.note && (
+                      <p
+                        className="rounded-xl px-3 py-2 text-[11px] text-[var(--ink-2)]"
+                        style={{
+                          background: 'var(--card-2)',
+                          borderLeft: '3px solid var(--accent-text)',
+                        }}
+                      >
+                        {statusMeta.note}
+                      </p>
+                    )}
 
                     <div className="space-y-1.5 text-xs text-[var(--muted)]">
                       <div className="flex justify-between">
@@ -367,17 +449,31 @@ export function GuruDashboard({
                     <div
                       className="flex items-center justify-between rounded-xl px-4 py-3"
                       style={{
-                        background: 'var(--accent-soft)',
-                        boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+                        background: statusMeta.isEstimate ? 'var(--warn-soft)' : 'var(--accent-soft)',
+                        boxShadow: statusMeta.isEstimate
+                          ? 'inset 0 0 0 1px var(--warn-line)'
+                          : 'inset 0 0 0 1px var(--accent-glow)',
                       }}
                     >
                       <div className="flex items-center gap-2">
-                        <Wallet className="h-4 w-4 text-[var(--accent-text)]" />
+                        <Wallet
+                          className="h-4 w-4"
+                          style={{
+                            color: statusMeta.isEstimate
+                              ? 'var(--warn-text)'
+                              : 'var(--accent-text)',
+                          }}
+                        />
                         <span className="text-xs font-bold uppercase text-[var(--ink)]">
-                          Gaji Bersih (Take Home Pay)
+                          {statusMeta.netLabel}
                         </span>
                       </div>
-                      <span className="text-base sm:text-lg font-bold text-[var(--accent-text)] tabular-nums">
+                      <span
+                        className="text-base sm:text-lg font-bold tabular-nums"
+                        style={{
+                          color: statusMeta.isEstimate ? 'var(--warn-text)' : 'var(--accent-text)',
+                        }}
+                      >
                         {formatRupiah(slip.net_salary)}
                       </span>
                     </div>
@@ -386,10 +482,12 @@ export function GuruDashboard({
                   <button
                     type="button"
                     onClick={() => handleDownloadPdf(slip)}
-                    className="nim-btn nim-btn--primary w-full"
+                    className={`nim-btn w-full ${
+                      statusMeta.isEstimate ? '' : 'nim-btn--primary'
+                    }`}
                   >
                     <FileDown className="h-4 w-4" />
-                    <span>Unduh Slip Gaji Resmi (PDF)</span>
+                    <span>{statusMeta.btnLabel}</span>
                   </button>
                 </div>
               );

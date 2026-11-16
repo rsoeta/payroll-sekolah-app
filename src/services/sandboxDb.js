@@ -788,24 +788,32 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         const own = getOwnedTeacher();
         if (!own) return forbidden();
         const linkedUser = db.Users_Auth.find((u) => u.id === own.user_id);
+        const ownComp = db.Salary_Components.find((c) => c.teacher_id === own.id) || null;
         const enrichedOwn = {
           ...own,
           email: own.email || linkedUser?.email || linkedUser?.username || session.email || '',
+          salary_component: ownComp,
         };
-        const visiblePayrollIds = new Set(
+        const approvedPayrollIds = new Set(
           db.Payrolls.filter((p) => p.status === 'approved' || p.status === 'paid').map((p) => p.id)
         );
-        const mySlips = db.Payroll_Details.filter(
-          (d) => d.teacher_id === own.id && visiblePayrollIds.has(d.payroll_id)
+        const myApprovedSlips = db.Payroll_Details.filter(
+          (d) => d.teacher_id === own.id && approvedPayrollIds.has(d.payroll_id)
         );
+        const allMySlips = db.Payroll_Details.filter((d) => d.teacher_id === own.id);
         return {
           ok: true,
           status: 200,
           data: {
             role: 'guru',
             teacher: enrichedOwn,
-            totalSlips: mySlips.length,
-            latestNetSalary: mySlips.length ? mySlips[mySlips.length - 1].net_salary : 0,
+            totalSlips: allMySlips.length,
+            latestNetSalary: myApprovedSlips.length
+              ? myApprovedSlips[myApprovedSlips.length - 1].net_salary
+              : 0,
+            latestEstimatedNetSalary: allMySlips.length
+              ? allMySlips[allMySlips.length - 1].net_salary
+              : 0,
           },
         };
       }
@@ -1713,7 +1721,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         const mySlips = db.Payroll_Details.filter((d) => d.teacher_id === own.id)
           .map((d) => {
             const parent = db.Payrolls.find((p) => p.id === d.payroll_id);
-            if (!parent || (parent.status !== 'approved' && parent.status !== 'paid')) return null;
+            if (!parent) return null;
             return {
               ...d,
               month: parent.month,
@@ -1724,7 +1732,14 @@ export async function executeSandboxRequest(method, action, token, payload = {})
               bank_account: own.bank_account,
             };
           })
-          .filter(Boolean);
+          .filter(Boolean)
+          .sort((a, b) => {
+            const yrDiff = Number(b.year || 0) - Number(a.year || 0);
+            if (yrDiff !== 0) return yrDiff;
+            return (
+              parsePeriodMonthKey(b.month).endMonth - parsePeriodMonthKey(a.month).endMonth
+            );
+          });
         return { ok: true, status: 200, data: mySlips };
       }
       return forbidden();

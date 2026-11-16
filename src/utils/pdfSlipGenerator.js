@@ -123,8 +123,14 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(255, 255, 255);
+  const slipStatusLabel =
+    slipRecord.payroll_status === 'draft'
+      ? 'ESTIMASI SLIP GAJI (DRAF)'
+      : slipRecord.payroll_status === 'submitted'
+      ? 'ESTIMASI SLIP GAJI (MENUNGGU KEPSEK)'
+      : 'SLIP GAJI RESMI';
   doc.text(
-    `SLIP GAJI RESMI  |  Periode: ${monthName} ${year}  |  Ref: ${String(slipRecord.id || 'DOC').slice(0, 8).toUpperCase()}`,
+    `${slipStatusLabel}  |  Periode: ${monthName} ${year}  |  Ref: ${String(slipRecord.id || 'DOC').slice(0, 8).toUpperCase()}`,
     textStartX,
     33.5
   );
