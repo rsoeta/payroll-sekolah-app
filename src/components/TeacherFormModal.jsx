@@ -1,6 +1,7 @@
 import React from 'react';
 import { Mail, Plus, Trash2, X } from 'lucide-react';
 import {
+  calculateInfaqZakat,
   formatRibuan,
   formatRupiah,
   parseRibuan,
@@ -10,7 +11,6 @@ import {
 const CUSTOM_COMPONENT_PRESETS = [
   { type: 'deduction', label: 'Potongan Koperasi / Kasbon', amount: 100000 },
   { type: 'deduction', label: 'Cicilan Pinjaman Yayasan', amount: 200000 },
-  { type: 'deduction', label: 'Infaq / Zakat Profesi', amount: 50000 },
   { type: 'deduction', label: 'Potongan Keterlambatan', amount: 25000 },
   { type: 'allowance', label: 'Tunjangan Wali Kelas', amount: 150000 },
   { type: 'allowance', label: 'Tunjangan Transport & Makan', amount: 200000 },
@@ -29,9 +29,15 @@ export function TeacherFormModal({
 }) {
   if (!isOpen) return null;
 
+  const isInfaqEnabled = Boolean(teacherForm.infaq_zakat_enabled);
+  const infaqZakatAmount = calculateInfaqZakat(
+    teacherForm.base_salary,
+    teacherForm.hourly_rate,
+    teacherForm.position_allowance,
+    isInfaqEnabled
+  );
   const customSummary = summarizeCustomComponents(teacherForm.custom_components);
-  const totalDeductions =
-    Number(teacherForm.bpjs_deduction || 0) + customSummary.totalCustomDeduction;
+  const totalDeductions = infaqZakatAmount + customSummary.totalCustomDeduction;
   const fixedNetPreview = Math.max(
     0,
     Number(teacherForm.base_salary || 0) +
@@ -219,23 +225,54 @@ export function TeacherFormModal({
                     />
                   </div>
                   <div>
-                    <label className="block text-[11.5px] font-semibold text-[var(--ink-2)]">
-                      Potongan BPJS (Rp)
-                    </label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      value={formatRibuan(teacherForm.bpjs_deduction)}
-                      onChange={(e) =>
-                        setTeacherForm({
-                          ...teacherForm,
-                          bpjs_deduction: parseRibuan(e.target.value),
-                        })
-                      }
-                      className="nim-input mt-1 !min-h-[34px] !py-1.5 text-xs font-semibold tabular-nums"
-                    />
+                    <div className="flex items-center justify-between gap-1.5">
+                      <label
+                        htmlFor="teacher-infaq-checkbox"
+                        className="inline-flex items-center gap-1.5 text-[11.5px] font-semibold text-[var(--ink-2)] cursor-pointer select-none"
+                      >
+                        <input
+                          id="teacher-infaq-checkbox"
+                          type="checkbox"
+                          checked={isInfaqEnabled}
+                          onChange={(e) => {
+                            const checked = e.target.checked;
+                            const nextAmount = calculateInfaqZakat(
+                              teacherForm.base_salary,
+                              teacherForm.hourly_rate,
+                              teacherForm.position_allowance,
+                              checked
+                            );
+                            setTeacherForm({
+                              ...teacherForm,
+                              infaq_zakat_enabled: checked,
+                              bpjs_deduction: nextAmount,
+                            });
+                          }}
+                          className="h-3.5 w-3.5 rounded accent-emerald-600"
+                        />
+                        <span>Infaq / Zakat Profesi (2,5%)</span>
+                      </label>
+                    </div>
+                    <div
+                      className="nim-input mt-1 !min-h-[34px] !py-1.5 px-2.5 flex items-center justify-between gap-2 text-xs tabular-nums"
+                      style={{
+                        background: isInfaqEnabled ? 'var(--bad-soft)' : 'var(--surface)',
+                        color: isInfaqEnabled ? 'var(--bad-text)' : 'var(--muted)',
+                      }}
+                    >
+                      <span className="text-[10.5px] truncate">
+                        {isInfaqEnabled ? 'Aktif (2,5%)' : 'Tidak Dipotong'}
+                      </span>
+                      <span className="font-bold shrink-0">
+                        {isInfaqEnabled ? `- ${formatRupiah(infaqZakatAmount)}` : 'Rp 0'}
+                      </span>
+                    </div>
                   </div>
                 </div>
+                <p className="text-[10.5px] text-[var(--muted)] leading-snug">
+                  Centang <strong>Infaq / Zakat Profesi</strong> jika guru bersedia dipotong
+                  2,5% dari (Gaji Pokok + Tarif per JTM + Tunjangan Jabatan).
+                </p>
               </div>
             </div>
 
@@ -249,7 +286,7 @@ export function TeacherFormModal({
                         Potongan &amp; Tunjangan Custom
                       </p>
                       <p className="text-[11px] text-[var(--muted)]">
-                        Koperasi, kasbon, infaq, atau tunjangan tambahan.
+                        Koperasi, kasbon, cicilan, atau tunjangan tambahan.
                       </p>
                     </div>
                     <button

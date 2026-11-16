@@ -12,7 +12,12 @@ import {
 } from 'lucide-react';
 import api from '../services/gasApi';
 import notify from '../utils/notify';
-import { formatRupiah, parseCustomComponents, getMonthName } from '../utils/formatters';
+import {
+  formatRupiah,
+  parseCustomComponents,
+  getMonthName,
+  resolveInfaqZakatAmount,
+} from '../utils/formatters';
 import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
 import FloatingTabBar from '../components/FloatingTabBar';
 import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
@@ -339,12 +344,24 @@ export function GuruDashboard({
                           </span>
                         </div>
                       ))}
-                      <div className="flex justify-between text-[var(--bad-text)]">
-                        <span>Potongan BPJS</span>
-                        <span className="font-semibold tabular-nums">
-                          - {formatRupiah(d.bpjs_deduction)}
-                        </span>
-                      </div>
+                      {(() => {
+                        const infaqZakat = resolveInfaqZakatAmount(d);
+                        return (
+                          <div
+                            className="flex justify-between"
+                            style={{
+                              color: infaqZakat > 0 ? 'var(--bad-text)' : 'var(--muted)',
+                            }}
+                          >
+                            <span>Infaq / Zakat Profesi (2,5%)</span>
+                            <span className="font-semibold tabular-nums">
+                              {infaqZakat > 0
+                                ? `- ${formatRupiah(infaqZakat)}`
+                                : 'Tidak Aktif (Rp 0)'}
+                            </span>
+                          </div>
+                        );
+                      })()}
                     </div>
 
                     <div

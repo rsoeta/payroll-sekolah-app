@@ -179,6 +179,59 @@ export function summarizeCustomComponents(raw) {
   };
 }
 
+export const INFAQ_ZAKAT_RATE = 0.025;
+
+/**
+ * Computes 2.5% Infaq / Zakat Profesi from (Gaji Pokok + Tarif per JTM + Tunjangan Jabatan)
+ * when enabled for the teacher, or 0 when unchecked.
+ */
+export function calculateInfaqZakat(
+  baseSalary,
+  hourlyRate,
+  positionAllowance,
+  isEnabled = true
+) {
+  if (!isEnabled) return 0;
+  const basis =
+    Math.max(0, Number(baseSalary || 0)) +
+    Math.max(0, Number(hourlyRate || 0)) +
+    Math.max(0, Number(positionAllowance || 0));
+  return Math.round(basis * INFAQ_ZAKAT_RATE);
+}
+
+/**
+ * Resolves whether Infaq / Zakat Profesi deduction is enabled on a salary component or slip detail.
+ */
+export function isInfaqZakatEnabled(record = {}) {
+  if (!record || typeof record !== 'object') return false;
+  if (record.infaq_zakat_enabled !== undefined) {
+    return (
+      record.infaq_zakat_enabled === true ||
+      String(record.infaq_zakat_enabled).toLowerCase() === 'true'
+    );
+  }
+  return Number(record.infaq_zakat ?? record.bpjs_deduction ?? 0) > 0;
+}
+
+/**
+ * Resolves the Infaq / Zakat Profesi amount for display & calculation.
+ */
+export function resolveInfaqZakatAmount(record = {}) {
+  if (!record || typeof record !== 'object') return 0;
+  if (record.infaq_zakat !== undefined) {
+    return Math.max(0, Number(record.infaq_zakat || 0));
+  }
+  if (record.infaq_zakat_enabled !== undefined) {
+    return calculateInfaqZakat(
+      record.base_salary,
+      record.hourly_rate,
+      record.position_allowance,
+      isInfaqZakatEnabled(record)
+    );
+  }
+  return Math.max(0, Number(record.bpjs_deduction || 0));
+}
+
 /**
  * Client-side Anti-XSS input sanitizer.
  */

@@ -94,10 +94,12 @@ export function SchoolProfileSection() {
         hourly_rate: 50000,
         jtm_honor: 1200000,
         position_allowance: 450000,
-        bpjs_deduction: 160000,
+        infaq_zakat_enabled: true,
+        infaq_zakat: 100000,
+        bpjs_deduction: 100000,
         custom_components: [],
         gross_salary: 5150000,
-        net_salary: 4990000,
+        net_salary: 5050000,
       }),
     };
     await downloadPayslipPdf(sampleSlip, form);

@@ -10,7 +10,13 @@ import {
   RefreshCw,
   Mail,
 } from 'lucide-react';
-import { formatRupiah, formatRibuan, parseRibuan, sanitizeClientString } from '../utils/formatters';
+import {
+  calculateInfaqZakat,
+  formatRupiah,
+  formatRibuan,
+  parseRibuan,
+  sanitizeClientString,
+} from '../utils/formatters';
 import notify from '../utils/notify';
 
 const TEMPLATE_HEADERS = [
@@ -21,7 +27,7 @@ const TEMPLATE_HEADERS = [
   'base_salary',
   'hourly_rate',
   'position_allowance',
-  'bpjs_deduction',
+  'infaq_zakat_enabled',
   'email',
 ];
 
@@ -34,7 +40,7 @@ const SAMPLE_ROWS = [
     3500000,
     55000,
     600000,
-    150000,
+    'YA',
     'ahmad.fauzi@gmail.com',
   ],
   [
@@ -45,7 +51,7 @@ const SAMPLE_ROWS = [
     2500000,
     50000,
     350000,
-    100000,
+    'TIDAK',
     'nadia.putri@gmail.com',
   ],
 ];
@@ -101,7 +107,15 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
   const idxBase = colIndex(['base_salary', 'gaji_pokok']);
   const idxRate = colIndex(['hourly_rate', 'tarif_jtm', 'tarif_per_jtm']);
   const idxAllowance = colIndex(['position_allowance', 'tunjangan', 'tunjangan_jabatan']);
-  const idxBpjs = colIndex(['bpjs_deduction', 'potongan_bpjs', 'bpjs']);
+  const idxInfaq = colIndex([
+    'infaq_zakat_enabled',
+    'infaq_zakat',
+    'zakat_profesi',
+    'infaq',
+    'bpjs_deduction',
+    'potongan_bpjs',
+    'bpjs',
+  ]);
   const idxEmail = colIndex(['email', 'gmail', 'alamat_gmail', 'akun_gmail', 'username']);
 
   const existingNipMap = new Map(
@@ -121,7 +135,30 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
     const base_salary = parseRibuan(getCell(idxBase, cells[4] ?? 0));
     const hourly_rate = parseRibuan(getCell(idxRate, cells[5] ?? 0));
     const position_allowance = parseRibuan(getCell(idxAllowance, cells[6] ?? 0));
-    const bpjs_deduction = parseRibuan(getCell(idxBpjs, cells[7] ?? 0));
+
+    const rawInfaqCell = getCell(idxInfaq, cells[7] ?? 'TIDAK');
+    const infaqToken = String(rawInfaqCell ?? '')
+      .trim()
+      .toLowerCase();
+    const infaq_zakat_enabled =
+      infaqToken === 'ya' ||
+      infaqToken === 'yes' ||
+      infaqToken === 'true' ||
+      infaqToken === '1' ||
+      infaqToken === 'aktif' ||
+      (infaqToken !== 'tidak' &&
+        infaqToken !== 'no' &&
+        infaqToken !== 'false' &&
+        infaqToken !== '0' &&
+        parseRibuan(rawInfaqCell) > 0);
+    const infaq_zakat = calculateInfaqZakat(
+      base_salary,
+      hourly_rate,
+      position_allowance,
+      infaq_zakat_enabled
+    );
+    const bpjs_deduction = infaq_zakat;
+
     const email = sanitizeClientString(String(getCell(idxEmail, cells[8] ?? '')))
       .trim()
       .toLowerCase();
@@ -151,6 +188,8 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
       base_salary,
       hourly_rate,
       position_allowance,
+      infaq_zakat_enabled,
+      infaq_zakat,
       bpjs_deduction,
       email,
       username: email,
@@ -325,7 +364,7 @@ export function TeacherImportModal({
 
             <div className="nim-card-well mt-3 p-2.5 text-[11px] text-[var(--muted)] font-mono overflow-x-auto">
               Kolom: nip | name | status | bank_account | base_salary | hourly_rate |
-              position_allowance | bpjs_deduction | email (Alamat Gmail)
+              position_allowance | infaq_zakat_enabled (YA/TIDAK) | email (Alamat Gmail)
             </div>
           </div>
 
@@ -453,9 +492,18 @@ export function TeacherImportModal({
                           </span>
                         </div>
                         <div>
-                          <span className="text-[var(--muted)] block">Potongan BPJS</span>
-                          <span className="font-bold text-[var(--bad-text)] tabular-nums">
-                            - {formatRupiah(row.bpjs_deduction)}
+                          <span className="text-[var(--muted)] block">Infaq / Zakat (2,5%)</span>
+                          <span
+                            className="font-bold tabular-nums"
+                            style={{
+                              color: row.infaq_zakat_enabled
+                                ? 'var(--bad-text)'
+                                : 'var(--muted)',
+                            }}
+                          >
+                            {row.infaq_zakat_enabled
+                              ? `- ${formatRupiah(row.infaq_zakat)}`
+                              : 'Tidak Aktif (Rp 0)'}
                           </span>
                         </div>
                       </div>

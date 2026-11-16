@@ -24,9 +24,12 @@ import {
 import api from '../services/gasApi';
 import notify from '../utils/notify';
 import {
+  calculateInfaqZakat,
   formatRupiah,
   formatRibuan,
+  isInfaqZakatEnabled,
   parseCustomComponents,
+  resolveInfaqZakatAmount,
   MONTHS_ID,
   getMonthName,
   normalizePeriodKey,
@@ -91,7 +94,8 @@ const INITIAL_TEACHER_FORM = {
   base_salary: 3000000,
   hourly_rate: 50000,
   position_allowance: 500000,
-  bpjs_deduction: 120000,
+  infaq_zakat_enabled: true,
+  bpjs_deduction: calculateInfaqZakat(3000000, 50000, 500000, true),
   custom_components: [],
 };
 
@@ -202,6 +206,7 @@ export function AdminDashboard({
 
   const openEditTeacherModal = useCallback((teacher) => {
     const comp = teacher.salary_component || {};
+    const infaqEnabled = isInfaqZakatEnabled(comp);
     setIsEditingTeacher(true);
     setTeacherForm({
       id: teacher.id,
@@ -213,7 +218,13 @@ export function AdminDashboard({
       base_salary: Number(comp.base_salary || 0),
       hourly_rate: Number(comp.hourly_rate || 0),
       position_allowance: Number(comp.position_allowance || 0),
-      bpjs_deduction: Number(comp.bpjs_deduction || 0),
+      infaq_zakat_enabled: infaqEnabled,
+      bpjs_deduction: calculateInfaqZakat(
+        comp.base_salary,
+        comp.hourly_rate,
+        comp.position_allowance,
+        infaqEnabled
+      ),
       custom_components: parseCustomComponents(comp.custom_components_json),
     });
     setTeacherModalOpen(true);
@@ -321,10 +332,21 @@ export function AdminDashboard({
       }))
       .filter((item) => item.label);
 
+    const isInfaqEnabled = Boolean(teacherForm.infaq_zakat_enabled);
+    const infaqZakatAmount = calculateInfaqZakat(
+      teacherForm.base_salary,
+      teacherForm.hourly_rate,
+      teacherForm.position_allowance,
+      isInfaqEnabled
+    );
+
     const submitPayload = {
       ...teacherForm,
       email: cleanEmail,
       username: cleanEmail,
+      infaq_zakat_enabled: isInfaqEnabled,
+      infaq_zakat: infaqZakatAmount,
+      bpjs_deduction: infaqZakatAmount,
       custom_components: cleanCustomList,
       custom_components_json: JSON.stringify(cleanCustomList),
     };
@@ -744,8 +766,13 @@ export function AdminDashboard({
                           boxShadow: 'inset 0 0 0 1px var(--line-2)',
                         }}
                       >
-                        Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan - Potongan BPJS
+                        Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan − Infaq / Zakat Profesi
+                        2,5% (opsional)
                       </code>
+                      <span className="mt-1 block text-[11px] text-[var(--muted)]">
+                        Infaq / Zakat Profesi = 2,5% × (Gaji Pokok + Tarif per JTM + Tunjangan
+                        Jabatan), dipotong hanya jika opsi diaktifkan pada profil guru.
+                      </span>
                     </p>
                   </div>
 
@@ -993,10 +1020,25 @@ export function AdminDashboard({
                                 </span>
                               </React.Fragment>
                             ))}
-                            <span>Potongan BPJS:</span>
-                            <span className="text-right font-semibold text-[var(--bad-text)] tabular-nums">
-                              - {formatRupiah(parsed.bpjs_deduction)}
-                            </span>
+                            {(() => {
+                              const infaqZakat = resolveInfaqZakatAmount(parsed);
+                              return (
+                                <>
+                                  <span>Infaq / Zakat Profesi (2,5%):</span>
+                                  <span
+                                    className="text-right font-semibold tabular-nums"
+                                    style={{
+                                      color:
+                                        infaqZakat > 0 ? 'var(--bad-text)' : 'var(--muted)',
+                                    }}
+                                  >
+                                    {infaqZakat > 0
+                                      ? `- ${formatRupiah(infaqZakat)}`
+                                      : 'Tidak Aktif (Rp 0)'}
+                                  </span>
+                                </>
+                              );
+                            })()}
                           </div>
 
                           <div
@@ -1399,10 +1441,30 @@ export function AdminDashboard({
                             </span>
                           </div>
                           <div>
-                            <span className="text-[var(--muted)] block">Potongan BPJS</span>
-                            <span className="font-bold text-[var(--bad-text)] tabular-nums">
-                              - {formatRupiah(comp.bpjs_deduction)}
+                            <span className="text-[var(--muted)] block">
+                              Infaq / Zakat Profesi (2,5%)
                             </span>
+                            {(() => {
+                              const infaqEnabled = isInfaqZakatEnabled(comp);
+                              const infaqVal = calculateInfaqZakat(
+                                comp.base_salary,
+                                comp.hourly_rate,
+                                comp.position_allowance,
+                                infaqEnabled
+                              );
+                              return (
+                                <span
+                                  className="font-bold tabular-nums"
+                                  style={{
+                                    color: infaqEnabled ? 'var(--bad-text)' : 'var(--muted)',
+                                  }}
+                                >
+                                  {infaqEnabled
+                                    ? `- ${formatRupiah(infaqVal)}`
+                                    : 'Tidak Aktif (Rp 0)'}
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
 

@@ -7,7 +7,12 @@
  * - Enforces Object-Level RBAC (403 Forbidden / 404 Not Found on unauthorized access)
  */
 
-import { normalizePeriodKey, parsePeriodMonthKey } from '../utils/formatters';
+import {
+  calculateInfaqZakat,
+  isInfaqZakatEnabled,
+  normalizePeriodKey,
+  parsePeriodMonthKey,
+} from '../utils/formatters';
 import {
   computeAttendanceBreakdownFromLogs,
   normalizeAttendanceStatus,
@@ -126,7 +131,8 @@ async function buildInitialDatabase() {
       base_salary: 3500000,
       hourly_rate: 55000,
       position_allowance: 750000,
-      bpjs_deduction: 150000,
+      infaq_zakat_enabled: true,
+      bpjs_deduction: calculateInfaqZakat(3500000, 55000, 750000, true),
     },
     {
       id: generateUuidV4(),
@@ -134,7 +140,8 @@ async function buildInitialDatabase() {
       base_salary: 3200000,
       hourly_rate: 50000,
       position_allowance: 500000,
-      bpjs_deduction: 140000,
+      infaq_zakat_enabled: true,
+      bpjs_deduction: calculateInfaqZakat(3200000, 50000, 500000, true),
     },
     {
       id: generateUuidV4(),
@@ -142,7 +149,8 @@ async function buildInitialDatabase() {
       base_salary: 2200000,
       hourly_rate: 45000,
       position_allowance: 300000,
-      bpjs_deduction: 100000,
+      infaq_zakat_enabled: false,
+      bpjs_deduction: 0,
     },
   ];
 
@@ -290,7 +298,14 @@ async function buildInitialDatabase() {
   const makeDetail = (payrollId, teacher, comp, att) => {
     const jtmHonor = att.total_jtm * comp.hourly_rate;
     const gross = comp.base_salary + jtmHonor + comp.position_allowance;
-    const net = gross - comp.bpjs_deduction;
+    const infaqEnabled = isInfaqZakatEnabled(comp);
+    const infaqZakat = calculateInfaqZakat(
+      comp.base_salary,
+      comp.hourly_rate,
+      comp.position_allowance,
+      infaqEnabled
+    );
+    const net = Math.max(0, gross - infaqZakat);
     return {
       id: generateUuidV4(),
       payroll_id: payrollId,
@@ -310,7 +325,9 @@ async function buildInitialDatabase() {
         hourly_rate: comp.hourly_rate,
         jtm_honor: jtmHonor,
         position_allowance: comp.position_allowance,
-        bpjs_deduction: comp.bpjs_deduction,
+        infaq_zakat_enabled: infaqEnabled,
+        infaq_zakat: infaqZakat,
+        bpjs_deduction: infaqZakat,
         gross_salary: gross,
         net_salary: net,
       }),
@@ -860,13 +877,25 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       };
       db.Teachers.push(newTeacher);
 
+      const baseSalary = Number(payload.base_salary || 0);
+      const hourlyRate = Number(payload.hourly_rate || 0);
+      const positionAllowance = Number(payload.position_allowance || 0);
+      const infaqEnabled = isInfaqZakatEnabled(payload);
+      const infaqAmount = calculateInfaqZakat(
+        baseSalary,
+        hourlyRate,
+        positionAllowance,
+        infaqEnabled
+      );
+
       const newComp = {
         id: generateUuidV4(),
         teacher_id: teacherId,
-        base_salary: Number(payload.base_salary || 0),
-        hourly_rate: Number(payload.hourly_rate || 0),
-        position_allowance: Number(payload.position_allowance || 0),
-        bpjs_deduction: Number(payload.bpjs_deduction || 0),
+        base_salary: baseSalary,
+        hourly_rate: hourlyRate,
+        position_allowance: positionAllowance,
+        infaq_zakat_enabled: infaqEnabled,
+        bpjs_deduction: infaqAmount,
         custom_components_json:
           typeof payload.custom_components_json === 'string'
             ? payload.custom_components_json
@@ -942,18 +971,32 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           ? JSON.stringify(payload.custom_components)
           : undefined;
       if (compIdx !== -1) {
+        const prevComp = db.Salary_Components[compIdx];
+        const nextBase = Number(payload.base_salary ?? prevComp.base_salary);
+        const nextRate = Number(payload.hourly_rate ?? prevComp.hourly_rate);
+        const nextAllowance = Number(payload.position_allowance ?? prevComp.position_allowance);
+        const nextInfaqEnabled =
+          payload.infaq_zakat_enabled !== undefined || payload.bpjs_deduction !== undefined
+            ? isInfaqZakatEnabled(payload)
+            : isInfaqZakatEnabled(prevComp);
+        const nextInfaqAmount = calculateInfaqZakat(
+          nextBase,
+          nextRate,
+          nextAllowance,
+          nextInfaqEnabled
+        );
+
         db.Salary_Components[compIdx] = {
-          ...db.Salary_Components[compIdx],
-          base_salary: Number(payload.base_salary ?? db.Salary_Components[compIdx].base_salary),
-          hourly_rate: Number(payload.hourly_rate ?? db.Salary_Components[compIdx].hourly_rate),
-          position_allowance: Number(
-            payload.position_allowance ?? db.Salary_Components[compIdx].position_allowance
-          ),
-          bpjs_deduction: Number(payload.bpjs_deduction ?? db.Salary_Components[compIdx].bpjs_deduction),
+          ...prevComp,
+          base_salary: nextBase,
+          hourly_rate: nextRate,
+          position_allowance: nextAllowance,
+          infaq_zakat_enabled: nextInfaqEnabled,
+          bpjs_deduction: nextInfaqAmount,
           custom_components_json:
             nextCustomJson !== undefined
               ? nextCustomJson
-              : db.Salary_Components[compIdx].custom_components_json || '[]',
+              : prevComp.custom_components_json || '[]',
         };
       }
       saveDb(db);
@@ -1013,23 +1056,36 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             bank_account: cleanBank,
             email: updatedEmail,
           };
+          const itemBase = Number(item.base_salary || 0);
+          const itemRate = Number(item.hourly_rate || 0);
+          const itemAllowance = Number(item.position_allowance || 0);
+          const itemInfaqEnabled = isInfaqZakatEnabled(item);
+          const itemInfaqAmount = calculateInfaqZakat(
+            itemBase,
+            itemRate,
+            itemAllowance,
+            itemInfaqEnabled
+          );
+
           const compIdx = db.Salary_Components.findIndex((c) => c.teacher_id === targetId);
           if (compIdx !== -1) {
             db.Salary_Components[compIdx] = {
               ...db.Salary_Components[compIdx],
-              base_salary: Number(item.base_salary || 0),
-              hourly_rate: Number(item.hourly_rate || 0),
-              position_allowance: Number(item.position_allowance || 0),
-              bpjs_deduction: Number(item.bpjs_deduction || 0),
+              base_salary: itemBase,
+              hourly_rate: itemRate,
+              position_allowance: itemAllowance,
+              infaq_zakat_enabled: itemInfaqEnabled,
+              bpjs_deduction: itemInfaqAmount,
             };
           } else {
             db.Salary_Components.push({
               id: generateUuidV4(),
               teacher_id: targetId,
-              base_salary: Number(item.base_salary || 0),
-              hourly_rate: Number(item.hourly_rate || 0),
-              position_allowance: Number(item.position_allowance || 0),
-              bpjs_deduction: Number(item.bpjs_deduction || 0),
+              base_salary: itemBase,
+              hourly_rate: itemRate,
+              position_allowance: itemAllowance,
+              infaq_zakat_enabled: itemInfaqEnabled,
+              bpjs_deduction: itemInfaqAmount,
             });
           }
           updatedCount++;
@@ -1062,13 +1118,25 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             bank_account: cleanBank,
             email: cleanEmail,
           });
+          const itemBase = Number(item.base_salary || 0);
+          const itemRate = Number(item.hourly_rate || 0);
+          const itemAllowance = Number(item.position_allowance || 0);
+          const itemInfaqEnabled = isInfaqZakatEnabled(item);
+          const itemInfaqAmount = calculateInfaqZakat(
+            itemBase,
+            itemRate,
+            itemAllowance,
+            itemInfaqEnabled
+          );
+
           db.Salary_Components.push({
             id: generateUuidV4(),
             teacher_id: teacherId,
-            base_salary: Number(item.base_salary || 0),
-            hourly_rate: Number(item.hourly_rate || 0),
-            position_allowance: Number(item.position_allowance || 0),
-            bpjs_deduction: Number(item.bpjs_deduction || 0),
+            base_salary: itemBase,
+            hourly_rate: itemRate,
+            position_allowance: itemAllowance,
+            infaq_zakat_enabled: itemInfaqEnabled,
+            bpjs_deduction: itemInfaqAmount,
           });
           createdCount++;
         }
@@ -1548,15 +1616,20 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           .filter((c) => c.type !== 'allowance')
           .reduce((sum, c) => sum + Number(c.amount || 0), 0);
 
+        const infaqEnabled = isInfaqZakatEnabled(comp);
+        const infaqZakatAmount = calculateInfaqZakat(
+          comp.base_salary,
+          comp.hourly_rate,
+          comp.position_allowance,
+          infaqEnabled
+        );
+
         const gross =
           Number(comp.base_salary) +
           jtmHonor +
           Number(comp.position_allowance) +
           customAllowanceTotal;
-        const net = Math.max(
-          0,
-          gross - Number(comp.bpjs_deduction) - customDeductionTotal
-        );
+        const net = Math.max(0, gross - infaqZakatAmount - customDeductionTotal);
         totalBudget += net;
 
         return {
@@ -1578,7 +1651,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             hourly_rate: comp.hourly_rate,
             jtm_honor: jtmHonor,
             position_allowance: comp.position_allowance,
-            bpjs_deduction: comp.bpjs_deduction,
+            infaq_zakat_enabled: infaqEnabled,
+            infaq_zakat: infaqZakatAmount,
+            bpjs_deduction: infaqZakatAmount,
             custom_components: customComponents,
             custom_allowance_total: customAllowanceTotal,
             custom_deduction_total: customDeductionTotal,

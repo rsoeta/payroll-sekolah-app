@@ -1,5 +1,10 @@
 import { jsPDF } from 'jspdf';
-import { formatRupiah, getMonthName, summarizeCustomComponents } from './formatters';
+import {
+  formatRupiah,
+  getMonthName,
+  resolveInfaqZakatAmount,
+  summarizeCustomComponents,
+} from './formatters';
 import { getSchoolProfile } from '../services/schoolProfileService';
 
 let cachedDefaultLogoDataUrl = null;
@@ -67,7 +72,7 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
   const hourlyRate = Number(details.hourly_rate || 0);
   const jtmHonor = Number(details.jtm_honor ?? totalJtm * hourlyRate);
   const positionAllowance = Number(details.position_allowance || 0);
-  const bpjsDeduction = Number(details.bpjs_deduction || 0);
+  const infaqZakatDeduction = resolveInfaqZakatAmount(details);
   const customSummary = summarizeCustomComponents(details.custom_components);
   const grossSalary = Number(
     details.gross_salary ??
@@ -76,7 +81,7 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
   const netSalary = Number(
     slipRecord.net_salary ??
       details.net_salary ??
-      Math.max(0, grossSalary - bpjsDeduction - customSummary.totalCustomDeduction)
+      Math.max(0, grossSalary - infaqZakatDeduction - customSummary.totalCustomDeduction)
   );
 
   // Header Banner (Matches dark forest green brand palette #19381f)
@@ -206,8 +211,19 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
   doc.setTextColor(15, 23, 42);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(10);
-  doc.text('1. Iuran BPJS Kesehatan & Ketenagakerjaan', 20, y);
-  doc.text(`- ${formatRupiah(bpjsDeduction)}`, 190, y, { align: 'right' });
+  doc.text(
+    infaqZakatDeduction > 0
+      ? '1. Infaq / Zakat Profesi (2,5%)'
+      : '1. Infaq / Zakat Profesi (Tidak Aktif / Opsional)',
+    20,
+    y
+  );
+  doc.text(
+    infaqZakatDeduction > 0 ? `- ${formatRupiah(infaqZakatDeduction)}` : 'Rp 0',
+    190,
+    y,
+    { align: 'right' }
+  );
 
   customSummary.deductions.forEach((item, idx) => {
     y += 8;
@@ -223,7 +239,7 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
     doc.setFont('helvetica', 'bold');
     doc.text('Total Seluruh Potongan', 20, y);
     doc.text(
-      `- ${formatRupiah(bpjsDeduction + customSummary.totalCustomDeduction)}`,
+      `- ${formatRupiah(infaqZakatDeduction + customSummary.totalCustomDeduction)}`,
       190,
       y,
       { align: 'right' }

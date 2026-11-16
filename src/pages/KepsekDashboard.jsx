@@ -12,7 +12,13 @@ import {
 } from 'lucide-react';
 import api from '../services/gasApi';
 import notify from '../utils/notify';
-import { formatRupiah, formatRibuan, parseCustomComponents, getMonthName } from '../utils/formatters';
+import {
+  formatRupiah,
+  formatRibuan,
+  parseCustomComponents,
+  getMonthName,
+  resolveInfaqZakatAmount,
+} from '../utils/formatters';
 import ConfirmModal from '../components/ConfirmModal';
 import FloatingTabBar from '../components/FloatingTabBar';
 
@@ -428,10 +434,24 @@ export function KepsekDashboard({
                         </span>
                       </React.Fragment>
                     ))}
-                    <span>Potongan BPJS:</span>
-                    <span className="text-right font-semibold text-[var(--bad-text)] tabular-nums">
-                      - {formatRupiah(d.bpjs_deduction)}
-                    </span>
+                    {(() => {
+                      const infaqZakat = resolveInfaqZakatAmount(d);
+                      return (
+                        <>
+                          <span>Infaq / Zakat Profesi (2,5%):</span>
+                          <span
+                            className="text-right font-semibold tabular-nums"
+                            style={{
+                              color: infaqZakat > 0 ? 'var(--bad-text)' : 'var(--muted)',
+                            }}
+                          >
+                            {infaqZakat > 0
+                              ? `- ${formatRupiah(infaqZakat)}`
+                              : 'Tidak Aktif (Rp 0)'}
+                          </span>
+                        </>
+                      );
+                    })()}
                   </div>
                   <div
                     className="flex items-center justify-between pt-2"
