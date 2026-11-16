@@ -147,12 +147,50 @@ export function getTodayIsoDate() {
   return `${y}-${m}-${d}`;
 }
 
+/**
+ * Normalizes any date string / Date / ISO timestamp (including GAS serialized Date)
+ * into a strict `YYYY-MM-DD` string suitable for `<input type="date">`.
+ */
+export function normalizeIsoDateOnly(value) {
+  if (!value) return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    const y = value.getFullYear();
+    const m = String(value.getMonth() + 1).padStart(2, '0');
+    const d = String(value.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  const raw = String(value).trim().replace(/^'/, '');
+  const exactMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (exactMatch) return raw;
+
+  if (/^\d{4}-\d{2}-\d{2}T/.test(raw)) {
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      const y = parsed.getFullYear();
+      const m = String(parsed.getMonth() + 1).padStart(2, '0');
+      const d = String(parsed.getDate()).padStart(2, '0');
+      return `${y}-${m}-${d}`;
+    }
+    return raw.slice(0, 10);
+  }
+
+  const parsedFallback = new Date(raw);
+  if (!Number.isNaN(parsedFallback.getTime())) {
+    const y = parsedFallback.getFullYear();
+    const m = String(parsedFallback.getMonth() + 1).padStart(2, '0');
+    const d = String(parsedFallback.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+  return raw;
+}
+
 export function formatDateIndo(dateStr) {
-  if (!dateStr) return '-';
-  const parts = String(dateStr).split('-');
-  if (parts.length !== 3) return dateStr;
+  const iso = normalizeIsoDateOnly(dateStr);
+  if (!iso) return '-';
+  const parts = iso.split('-');
+  if (parts.length !== 3) return iso;
   const dateObj = new Date(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]));
-  if (Number.isNaN(dateObj.getTime())) return dateStr;
+  if (Number.isNaN(dateObj.getTime())) return iso;
   return dateObj.toLocaleDateString('id-ID', {
     weekday: 'short',
     day: 'numeric',

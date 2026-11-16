@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import {
   CalendarCheck,
   CheckCircle2,
@@ -27,6 +27,7 @@ import {
   getAttendanceConditionMeta,
   getTodayIsoDate,
   normalizeAttendanceStatus,
+  normalizeIsoDateOnly,
 } from '../utils/attendanceHelpers';
 
 const CUSTOM_CLASSES_STORAGE_KEY = 'sipayroll_guru_classes_v1';
@@ -98,8 +99,27 @@ export function GuruSelfAttendanceSection({
   const [classList, setClassList] = useState(() => loadStoredClassList());
   const [newClassInput, setNewClassInput] = useState('');
   const [classRowsState, setClassRowsState] = useState({});
+  const [editingHighlightClass, setEditingHighlightClass] = useState('');
 
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const formRef = useRef(null);
+  const classListRef = useRef(classList);
+  classListRef.current = classList;
+
+  const buildChecklistStateForDate = useCallback((targetDate, sourceLogs, classes) => {
+    const cleanTargetDate = normalizeIsoDateOnly(targetDate);
+    const logsForDate = sourceLogs.filter(
+      (item) => normalizeIsoDateOnly(item.date) === cleanTargetDate
+    );
+    const nextState = {};
+    for (const cls of classes) {
+      const match = logsForDate.find(
+        (l) => String(l.class_name || 'Kelas Umum').trim().toLowerCase() === cls.toLowerCase()
+      );
+      nextState[cls] = createDefaultClassRowState(match || null);
+    }
+    return nextState;
+  }, []);
 
   const loadPeriodAttendance = useCallback(async () => {
     setLoading(true);
@@ -108,14 +128,18 @@ export function GuruSelfAttendanceSection({
         api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }),
         api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
       ]);
-      const normalizedLogs = Array.isArray(logRows) ? logRows : [];
+      const normalizedLogs = (Array.isArray(logRows) ? logRows : []).map((row) => ({
+        ...row,
+        date: normalizeIsoDateOnly(row.date),
+        class_name: String(row.class_name || 'Kelas Umum').trim() || 'Kelas Umum',
+      }));
       setLogs(normalizedLogs);
       setAdminSummary(Array.isArray(attRows) && attRows.length > 0 ? attRows[0] : null);
       onLogsCountChange?.(normalizedLogs.length);
 
       // Pastikan seluruh nama kelas yang ada pada riwayat log ikut muncul di checklist
       const discoveredClasses = normalizedLogs
-        .map((l) => String(l.class_name || '').trim())
+        .map((l) => l.class_name)
         .filter(Boolean);
       if (discoveredClasses.length > 0) {
         setClassList((prev) => {
@@ -142,24 +166,38 @@ export function GuruSelfAttendanceSection({
     loadPeriodAttendance();
   }, [loadPeriodAttendance]);
 
-  // Sinkronkan state checklist per-kelas setiap kali `dateInput`, `logs`, atau `classList` berubah
+  // Sinkronkan checklist ketika tanggal atau data `logs` berubah (tidak menimpa edit saat `classList` ditambah)
   useEffect(() => {
-    const logsForDate = logs.filter(
-      (item) => String(item.date || '').trim() === String(dateInput).trim()
-    );
-    const nextState = {};
-    for (const cls of classList) {
-      const match = logsForDate.find(
-        (l) => String(l.class_name || 'Kelas Umum').trim().toLowerCase() === cls.toLowerCase()
+    setClassRowsState(buildChecklistStateForDate(dateInput, logs, classListRef.current));
+  }, [dateInput, logs, buildChecklistStateForDate]);
+
+  // Pastikan kelas yang baru ditambahkan lewat `classList` langsung terinisialisasi tanpa mereset kelas lain
+  useEffect(() => {
+    setClassRowsState((prev) => {
+      let updated = false;
+      const next = { ...prev };
+      const cleanTargetDate = normalizeIsoDateOnly(dateInput);
+      const logsForDate = logs.filter(
+        (item) => normalizeIsoDateOnly(item.date) === cleanTargetDate
       );
-      nextState[cls] = createDefaultClassRowState(match || null);
-    }
-    setClassRowsState(nextState);
-  }, [dateInput, logs, classList]);
+      for (const cls of classList) {
+        if (!next[cls]) {
+          const match = logsForDate.find(
+            (l) => String(l.class_name || 'Kelas Umum').trim().toLowerCase() === cls.toLowerCase()
+          );
+          next[cls] = createDefaultClassRowState(match || null);
+          updated = true;
+        }
+      }
+      return updated ? next : prev;
+    });
+  }, [classList, dateInput, logs]);
 
   const handleDateChange = (nextDate) => {
-    setDateInput(nextDate);
-    const parts = String(nextDate || '').split('-');
+    const isoDate = normalizeIsoDateOnly(nextDate) || nextDate;
+    setEditingHighlightClass('');
+    setDateInput(isoDate);
+    const parts = String(isoDate || '').split('-');
     if (parts.length === 3) {
       const yr = Number(parts[0]);
       const mo = Number(parts[1]);
@@ -168,6 +206,36 @@ export function GuruSelfAttendanceSection({
         setSelectedMonth(mo);
       }
     }
+  };
+
+  const handleEditLogEntry = (log) => {
+    const isoDate = normalizeIsoDateOnly(log.date);
+    const targetClass = String(log.class_name || 'Kelas Umum').trim() || 'Kelas Umum';
+
+    let nextClasses = classListRef.current;
+    if (!nextClasses.some((c) => c.toLowerCase() === targetClass.toLowerCase())) {
+      nextClasses = [...nextClasses, targetClass];
+      setClassList(nextClasses);
+      saveStoredClassList(nextClasses);
+    }
+
+    const parts = isoDate.split('-');
+    if (parts.length === 3) {
+      const yr = Number(parts[0]);
+      const mo = Number(parts[1]);
+      if (yr >= 2020 && yr <= 2100 && mo >= 1 && mo <= 12) {
+        setSelectedYear(yr);
+        setSelectedMonth(mo);
+      }
+    }
+
+    setDateInput(isoDate);
+    setClassRowsState(buildChecklistStateForDate(isoDate, logs, nextClasses));
+    setEditingHighlightClass(targetClass);
+    formRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    notify.info(
+      `Mode edit aktif: ${targetClass} (${formatDateIndo(isoDate)}). Ubah kondisi/JTM lalu simpan.`
+    );
   };
 
   const handleToggleClassCheck = (clsName) => {
@@ -309,7 +377,8 @@ export function GuruSelfAttendanceSection({
   );
 
   const logsExistingOnSelectedDate = useMemo(
-    () => logs.filter((l) => String(l.date).trim() === String(dateInput).trim()).length,
+    () =>
+      logs.filter((l) => normalizeIsoDateOnly(l.date) === normalizeIsoDateOnly(dateInput)).length,
     [logs, dateInput]
   );
 
@@ -339,6 +408,7 @@ export function GuruSelfAttendanceSection({
           )}) tersimpan & langsung masuk ke rekap Admin.`
         );
       }
+      setEditingHighlightClass('');
       await loadPeriodAttendance();
       onSyncComplete?.();
     } catch (err) {
@@ -356,6 +426,7 @@ export function GuruSelfAttendanceSection({
         `Catatan ${deleteTarget.class_name || 'Kelas'} (${formatDateIndo(deleteTarget.date)}) dihapus.`
       );
       setDeleteTarget(null);
+      setEditingHighlightClass('');
       await loadPeriodAttendance();
       onSyncComplete?.();
     } catch (err) {
@@ -514,6 +585,7 @@ export function GuruSelfAttendanceSection({
       <div className="fluid-container items-start">
         {/* Per-Class Checkbox Form */}
         <form
+          ref={formRef}
           onSubmit={handleSaveDateChecklist}
           className="fluid-item nim-glass nim-card space-y-4"
         >
@@ -599,12 +671,17 @@ export function GuruSelfAttendanceSection({
             {classList.map((clsName) => {
               const rowState = classRowsState[clsName] || createDefaultClassRowState(null);
               const condMeta = getAttendanceConditionMeta(rowState.status);
+              const isHighlightedEdit =
+                editingHighlightClass &&
+                editingHighlightClass.toLowerCase() === clsName.toLowerCase();
 
               return (
                 <div
                   key={clsName}
                   className={`rounded-xl border p-3 transition-all ${
-                    rowState.checked
+                    isHighlightedEdit
+                      ? 'border-indigo-500 bg-indigo-50/50 ring-2 ring-indigo-500/20'
+                      : rowState.checked
                       ? 'border-emerald-500/80 bg-emerald-50/40'
                       : 'border-[var(--line)] bg-[var(--surface)] opacity-85'
                   }`}
@@ -758,7 +835,11 @@ export function GuruSelfAttendanceSection({
             ) : (
               <>
                 <Save className="h-3.5 w-3.5" />
-                <span>Simpan Kehadiran Per-Kelas &amp; Masuk Rekap Admin</span>
+                <span>
+                  {logsExistingOnSelectedDate > 0
+                    ? 'Simpan Perubahan Kehadiran Per-Kelas'
+                    : 'Simpan Kehadiran Per-Kelas & Masuk Rekap Admin'}
+                </span>
               </>
             )}
           </button>
@@ -847,7 +928,8 @@ export function GuruSelfAttendanceSection({
               <div className="space-y-2 max-h-[380px] overflow-y-auto pr-0.5">
                 {logs.map((log) => {
                   const cond = getAttendanceConditionMeta(log.status);
-                  const isActiveDate = String(log.date) === String(dateInput);
+                  const isActiveDate =
+                    normalizeIsoDateOnly(log.date) === normalizeIsoDateOnly(dateInput);
                   return (
                     <div
                       key={log.id}
@@ -892,11 +974,12 @@ export function GuruSelfAttendanceSection({
                         <div className="flex items-center gap-1 shrink-0">
                           <button
                             type="button"
-                            onClick={() => handleDateChange(log.date)}
-                            title="Muat tanggal ini ke checklist"
-                            className="rounded-lg border border-[var(--line)] bg-white p-1.5 text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
+                            onClick={() => handleEditLogEntry(log)}
+                            title="Edit catatan kelas ini"
+                            className="inline-flex items-center gap-1 rounded-lg border border-[var(--line)] bg-white px-2 py-1 text-[11px] font-semibold text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
                           >
-                            <Pencil className="h-3.5 w-3.5" />
+                            <Pencil className="h-3 w-3" />
+                            <span>Edit</span>
                           </button>
                           <button
                             type="button"
