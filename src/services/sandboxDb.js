@@ -132,7 +132,7 @@ async function buildInitialDatabase() {
       hourly_rate: 55000,
       position_allowance: 750000,
       infaq_zakat_enabled: true,
-      bpjs_deduction: calculateInfaqZakat(3500000, 55000, 750000, true),
+      bpjs_deduction: 1,
     },
     {
       id: generateUuidV4(),
@@ -141,7 +141,7 @@ async function buildInitialDatabase() {
       hourly_rate: 50000,
       position_allowance: 500000,
       infaq_zakat_enabled: true,
-      bpjs_deduction: calculateInfaqZakat(3200000, 50000, 500000, true),
+      bpjs_deduction: 1,
     },
     {
       id: generateUuidV4(),
@@ -301,7 +301,7 @@ async function buildInitialDatabase() {
     const infaqEnabled = isInfaqZakatEnabled(comp);
     const infaqZakat = calculateInfaqZakat(
       comp.base_salary,
-      comp.hourly_rate,
+      jtmHonor,
       comp.position_allowance,
       infaqEnabled
     );
@@ -881,12 +881,6 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       const hourlyRate = Number(payload.hourly_rate || 0);
       const positionAllowance = Number(payload.position_allowance || 0);
       const infaqEnabled = isInfaqZakatEnabled(payload);
-      const infaqAmount = calculateInfaqZakat(
-        baseSalary,
-        hourlyRate,
-        positionAllowance,
-        infaqEnabled
-      );
 
       const newComp = {
         id: generateUuidV4(),
@@ -895,7 +889,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         hourly_rate: hourlyRate,
         position_allowance: positionAllowance,
         infaq_zakat_enabled: infaqEnabled,
-        bpjs_deduction: infaqAmount,
+        bpjs_deduction: infaqEnabled ? 1 : 0,
         custom_components_json:
           typeof payload.custom_components_json === 'string'
             ? payload.custom_components_json
@@ -979,12 +973,6 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           payload.infaq_zakat_enabled !== undefined || payload.bpjs_deduction !== undefined
             ? isInfaqZakatEnabled(payload)
             : isInfaqZakatEnabled(prevComp);
-        const nextInfaqAmount = calculateInfaqZakat(
-          nextBase,
-          nextRate,
-          nextAllowance,
-          nextInfaqEnabled
-        );
 
         db.Salary_Components[compIdx] = {
           ...prevComp,
@@ -992,7 +980,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           hourly_rate: nextRate,
           position_allowance: nextAllowance,
           infaq_zakat_enabled: nextInfaqEnabled,
-          bpjs_deduction: nextInfaqAmount,
+          bpjs_deduction: nextInfaqEnabled ? 1 : 0,
           custom_components_json:
             nextCustomJson !== undefined
               ? nextCustomJson
@@ -1060,12 +1048,6 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           const itemRate = Number(item.hourly_rate || 0);
           const itemAllowance = Number(item.position_allowance || 0);
           const itemInfaqEnabled = isInfaqZakatEnabled(item);
-          const itemInfaqAmount = calculateInfaqZakat(
-            itemBase,
-            itemRate,
-            itemAllowance,
-            itemInfaqEnabled
-          );
 
           const compIdx = db.Salary_Components.findIndex((c) => c.teacher_id === targetId);
           if (compIdx !== -1) {
@@ -1075,7 +1057,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
               hourly_rate: itemRate,
               position_allowance: itemAllowance,
               infaq_zakat_enabled: itemInfaqEnabled,
-              bpjs_deduction: itemInfaqAmount,
+              bpjs_deduction: itemInfaqEnabled ? 1 : 0,
             };
           } else {
             db.Salary_Components.push({
@@ -1085,7 +1067,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
               hourly_rate: itemRate,
               position_allowance: itemAllowance,
               infaq_zakat_enabled: itemInfaqEnabled,
-              bpjs_deduction: itemInfaqAmount,
+              bpjs_deduction: itemInfaqEnabled ? 1 : 0,
             });
           }
           updatedCount++;
@@ -1122,12 +1104,6 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           const itemRate = Number(item.hourly_rate || 0);
           const itemAllowance = Number(item.position_allowance || 0);
           const itemInfaqEnabled = isInfaqZakatEnabled(item);
-          const itemInfaqAmount = calculateInfaqZakat(
-            itemBase,
-            itemRate,
-            itemAllowance,
-            itemInfaqEnabled
-          );
 
           db.Salary_Components.push({
             id: generateUuidV4(),
@@ -1136,7 +1112,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             hourly_rate: itemRate,
             position_allowance: itemAllowance,
             infaq_zakat_enabled: itemInfaqEnabled,
-            bpjs_deduction: itemInfaqAmount,
+            bpjs_deduction: itemInfaqEnabled ? 1 : 0,
           });
           createdCount++;
         }
@@ -1619,7 +1595,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         const infaqEnabled = isInfaqZakatEnabled(comp);
         const infaqZakatAmount = calculateInfaqZakat(
           comp.base_salary,
-          comp.hourly_rate,
+          jtmHonor,
           comp.position_allowance,
           infaqEnabled
         );

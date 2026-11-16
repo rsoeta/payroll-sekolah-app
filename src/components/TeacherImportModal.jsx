@@ -11,7 +11,6 @@ import {
   Mail,
 } from 'lucide-react';
 import {
-  calculateInfaqZakat,
   formatRupiah,
   formatRibuan,
   parseRibuan,
@@ -151,13 +150,7 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
         infaqToken !== 'false' &&
         infaqToken !== '0' &&
         parseRibuan(rawInfaqCell) > 0);
-    const infaq_zakat = calculateInfaqZakat(
-      base_salary,
-      hourly_rate,
-      position_allowance,
-      infaq_zakat_enabled
-    );
-    const bpjs_deduction = infaq_zakat;
+    const bpjs_deduction = infaq_zakat_enabled ? 1 : 0;
 
     const email = sanitizeClientString(String(getCell(idxEmail, cells[8] ?? '')))
       .trim()
@@ -189,7 +182,6 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
       hourly_rate,
       position_allowance,
       infaq_zakat_enabled,
-      infaq_zakat,
       bpjs_deduction,
       email,
       username: email,
@@ -494,16 +486,14 @@ export function TeacherImportModal({
                         <div>
                           <span className="text-[var(--muted)] block">Infaq / Zakat (2,5%)</span>
                           <span
-                            className="font-bold tabular-nums"
+                            className="font-bold"
                             style={{
                               color: row.infaq_zakat_enabled
-                                ? 'var(--bad-text)'
+                                ? 'var(--good-text)'
                                 : 'var(--muted)',
                             }}
                           >
-                            {row.infaq_zakat_enabled
-                              ? `- ${formatRupiah(row.infaq_zakat)}`
-                              : 'Tidak Aktif (Rp 0)'}
+                            {row.infaq_zakat_enabled ? 'Aktif (2,5% di Payroll)' : 'Tidak Aktif (Rp 0)'}
                           </span>
                         </div>
                       </div>

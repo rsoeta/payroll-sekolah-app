@@ -24,7 +24,6 @@ import {
 import api from '../services/gasApi';
 import notify from '../utils/notify';
 import {
-  calculateInfaqZakat,
   formatRupiah,
   formatRibuan,
   isInfaqZakatEnabled,
@@ -95,7 +94,7 @@ const INITIAL_TEACHER_FORM = {
   hourly_rate: 50000,
   position_allowance: 500000,
   infaq_zakat_enabled: true,
-  bpjs_deduction: calculateInfaqZakat(3000000, 50000, 500000, true),
+  bpjs_deduction: 1,
   custom_components: [],
 };
 
@@ -219,12 +218,7 @@ export function AdminDashboard({
       hourly_rate: Number(comp.hourly_rate || 0),
       position_allowance: Number(comp.position_allowance || 0),
       infaq_zakat_enabled: infaqEnabled,
-      bpjs_deduction: calculateInfaqZakat(
-        comp.base_salary,
-        comp.hourly_rate,
-        comp.position_allowance,
-        infaqEnabled
-      ),
+      bpjs_deduction: infaqEnabled ? 1 : 0,
       custom_components: parseCustomComponents(comp.custom_components_json),
     });
     setTeacherModalOpen(true);
@@ -333,20 +327,13 @@ export function AdminDashboard({
       .filter((item) => item.label);
 
     const isInfaqEnabled = Boolean(teacherForm.infaq_zakat_enabled);
-    const infaqZakatAmount = calculateInfaqZakat(
-      teacherForm.base_salary,
-      teacherForm.hourly_rate,
-      teacherForm.position_allowance,
-      isInfaqEnabled
-    );
 
     const submitPayload = {
       ...teacherForm,
       email: cleanEmail,
       username: cleanEmail,
       infaq_zakat_enabled: isInfaqEnabled,
-      infaq_zakat: infaqZakatAmount,
-      bpjs_deduction: infaqZakatAmount,
+      bpjs_deduction: isInfaqEnabled ? 1 : 0,
       custom_components: cleanCustomList,
       custom_components_json: JSON.stringify(cleanCustomList),
     };
@@ -770,8 +757,8 @@ export function AdminDashboard({
                         2,5% (opsional)
                       </code>
                       <span className="mt-1 block text-[11px] text-[var(--muted)]">
-                        Infaq / Zakat Profesi = 2,5% × (Gaji Pokok + Tarif per JTM + Tunjangan
-                        Jabatan), dipotong hanya jika opsi diaktifkan pada profil guru.
+                        Infaq / Zakat Profesi = 2,5% × [Gaji Pokok + (JTM × Tarif) + Tunjangan
+                        Jabatan], otomatis dipotong saat kalkulasi bagi guru yang mengaktifkan opsi.
                       </span>
                     </p>
                   </div>
@@ -1446,22 +1433,14 @@ export function AdminDashboard({
                             </span>
                             {(() => {
                               const infaqEnabled = isInfaqZakatEnabled(comp);
-                              const infaqVal = calculateInfaqZakat(
-                                comp.base_salary,
-                                comp.hourly_rate,
-                                comp.position_allowance,
-                                infaqEnabled
-                              );
                               return (
                                 <span
-                                  className="font-bold tabular-nums"
+                                  className="font-bold"
                                   style={{
-                                    color: infaqEnabled ? 'var(--bad-text)' : 'var(--muted)',
+                                    color: infaqEnabled ? 'var(--good-text)' : 'var(--muted)',
                                   }}
                                 >
-                                  {infaqEnabled
-                                    ? `- ${formatRupiah(infaqVal)}`
-                                    : 'Tidak Aktif (Rp 0)'}
+                                  {infaqEnabled ? 'Aktif (2,5% di Payroll)' : 'Tidak Aktif (Rp 0)'}
                                 </span>
                               );
                             })()}

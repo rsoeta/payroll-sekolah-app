@@ -182,19 +182,19 @@ export function summarizeCustomComponents(raw) {
 export const INFAQ_ZAKAT_RATE = 0.025;
 
 /**
- * Computes 2.5% Infaq / Zakat Profesi from (Gaji Pokok + Tarif per JTM + Tunjangan Jabatan)
+ * Computes 2.5% Infaq / Zakat Profesi from (Gaji Pokok + Honor Mengajar (JTM × Tarif) + Tunjangan Jabatan)
  * when enabled for the teacher, or 0 when unchecked.
  */
 export function calculateInfaqZakat(
   baseSalary,
-  hourlyRate,
+  jtmHonor,
   positionAllowance,
   isEnabled = true
 ) {
   if (!isEnabled) return 0;
   const basis =
     Math.max(0, Number(baseSalary || 0)) +
-    Math.max(0, Number(hourlyRate || 0)) +
+    Math.max(0, Number(jtmHonor || 0)) +
     Math.max(0, Number(positionAllowance || 0));
   return Math.round(basis * INFAQ_ZAKAT_RATE);
 }
@@ -214,7 +214,7 @@ export function isInfaqZakatEnabled(record = {}) {
 }
 
 /**
- * Resolves the Infaq / Zakat Profesi amount for display & calculation.
+ * Resolves the Infaq / Zakat Profesi amount for a calculated slip detail.
  */
 export function resolveInfaqZakatAmount(record = {}) {
   if (!record || typeof record !== 'object') return 0;
@@ -222,9 +222,12 @@ export function resolveInfaqZakatAmount(record = {}) {
     return Math.max(0, Number(record.infaq_zakat || 0));
   }
   if (record.infaq_zakat_enabled !== undefined) {
+    const jtmHonor = Number(
+      record.jtm_honor ?? Number(record.total_jtm || 0) * Number(record.hourly_rate || 0)
+    );
     return calculateInfaqZakat(
       record.base_salary,
-      record.hourly_rate,
+      jtmHonor,
       record.position_allowance,
       isInfaqZakatEnabled(record)
     );

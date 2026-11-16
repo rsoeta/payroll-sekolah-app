@@ -1,7 +1,6 @@
 import React from 'react';
 import { Mail, Plus, Trash2, X } from 'lucide-react';
 import {
-  calculateInfaqZakat,
   formatRibuan,
   formatRupiah,
   parseRibuan,
@@ -30,20 +29,13 @@ export function TeacherFormModal({
   if (!isOpen) return null;
 
   const isInfaqEnabled = Boolean(teacherForm.infaq_zakat_enabled);
-  const infaqZakatAmount = calculateInfaqZakat(
-    teacherForm.base_salary,
-    teacherForm.hourly_rate,
-    teacherForm.position_allowance,
-    isInfaqEnabled
-  );
   const customSummary = summarizeCustomComponents(teacherForm.custom_components);
-  const totalDeductions = infaqZakatAmount + customSummary.totalCustomDeduction;
-  const fixedNetPreview = Math.max(
+  const fixedNetBeforeInfaq = Math.max(
     0,
     Number(teacherForm.base_salary || 0) +
       Number(teacherForm.position_allowance || 0) +
       customSummary.totalCustomAllowance -
-      totalDeductions
+      customSummary.totalCustomDeduction
   );
 
   return (
@@ -236,16 +228,10 @@ export function TeacherFormModal({
                           checked={isInfaqEnabled}
                           onChange={(e) => {
                             const checked = e.target.checked;
-                            const nextAmount = calculateInfaqZakat(
-                              teacherForm.base_salary,
-                              teacherForm.hourly_rate,
-                              teacherForm.position_allowance,
-                              checked
-                            );
                             setTeacherForm({
                               ...teacherForm,
                               infaq_zakat_enabled: checked,
-                              bpjs_deduction: nextAmount,
+                              bpjs_deduction: checked ? 1 : 0,
                             });
                           }}
                           className="h-3.5 w-3.5 rounded accent-emerald-600"
@@ -254,24 +240,25 @@ export function TeacherFormModal({
                       </label>
                     </div>
                     <div
-                      className="nim-input mt-1 !min-h-[34px] !py-1.5 px-2.5 flex items-center justify-between gap-2 text-xs tabular-nums"
+                      className="nim-input mt-1 !min-h-[34px] !py-1.5 px-2.5 flex items-center justify-between gap-2 text-xs"
                       style={{
-                        background: isInfaqEnabled ? 'var(--bad-soft)' : 'var(--surface)',
-                        color: isInfaqEnabled ? 'var(--bad-text)' : 'var(--muted)',
+                        background: isInfaqEnabled ? 'var(--good-soft)' : 'var(--surface)',
+                        color: isInfaqEnabled ? 'var(--good-text)' : 'var(--muted)',
                       }}
                     >
-                      <span className="text-[10.5px] truncate">
-                        {isInfaqEnabled ? 'Aktif (2,5%)' : 'Tidak Dipotong'}
+                      <span className="text-[11px] font-bold truncate">
+                        {isInfaqEnabled ? 'Aktif (Dipotong 2,5%)' : 'Tidak Aktif'}
                       </span>
-                      <span className="font-bold shrink-0">
-                        {isInfaqEnabled ? `- ${formatRupiah(infaqZakatAmount)}` : 'Rp 0'}
+                      <span className="text-[10.5px] font-semibold shrink-0">
+                        {isInfaqEnabled ? 'Saat Payroll' : 'Rp 0'}
                       </span>
                     </div>
                   </div>
                 </div>
                 <p className="text-[10.5px] text-[var(--muted)] leading-snug">
-                  Centang <strong>Infaq / Zakat Profesi</strong> jika guru bersedia dipotong
-                  2,5% dari (Gaji Pokok + Tarif per JTM + Tunjangan Jabatan).
+                  Centang bila guru bersedia dipotong <strong>2,5%</strong> dari{' '}
+                  <strong>Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan</strong> pada Menu
+                  Alur Penggajian &amp; Slip Gaji.
                 </p>
               </div>
             </div>
@@ -401,23 +388,23 @@ export function TeacherFormModal({
                   style={{ borderTop: '1px solid var(--line)' }}
                 >
                   <span className="text-[var(--muted)]">
-                    Total Potongan:{' '}
+                    Potongan Custom:{' '}
                     <strong className="text-[var(--bad-text)] tabular-nums">
-                      - {formatRupiah(totalDeductions)}
+                      - {formatRupiah(customSummary.totalCustomDeduction)}
                     </strong>
                   </span>
-                  {customSummary.totalCustomAllowance > 0 && (
-                    <span className="text-[var(--muted)]">
-                      Tunj. Custom:{' '}
-                      <strong className="text-[var(--good-text)] tabular-nums">
-                        + {formatRupiah(customSummary.totalCustomAllowance)}
-                      </strong>
-                    </span>
-                  )}
                   <span className="text-[var(--muted)]">
-                    Gaji Tetap Bersih:{' '}
+                    Infaq 2,5%:{' '}
+                    <strong
+                      style={{ color: isInfaqEnabled ? 'var(--bad-text)' : 'var(--muted)' }}
+                    >
+                      {isInfaqEnabled ? 'Aktif (di Payroll)' : 'Tidak Aktif'}
+                    </strong>
+                  </span>
+                  <span className="text-[var(--muted)]">
+                    Basis Tetap:{' '}
                     <strong className="text-[var(--accent-text)] tabular-nums">
-                      {formatRupiah(fixedNetPreview)}
+                      {formatRupiah(fixedNetBeforeInfaq)}
                     </strong>
                   </span>
                 </div>
