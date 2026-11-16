@@ -65,6 +65,7 @@ const SCHEMA_HEADERS = Object.freeze({
     'note',
     'created_at',
     'updated_at',
+    'class_name',
   ],
   [SHEETS.PAYROLLS]: ['id', 'month', 'year', 'total_budget', 'status'],
   [SHEETS.PAYROLL_DETAILS]: ['id', 'payroll_id', 'teacher_id', 'net_salary', 'details_json'],
@@ -245,6 +246,12 @@ function routeAuthenticatedRequest(method, action, payload, session) {
           return forbiddenResponse();
         }
         return handleUpsertMyAttendanceLog(session, payload);
+
+      case 'attendanceLogs.syncDateLogs':
+        if (!['POST', 'PUT'].includes(method) || ![ROLES.GURU, ROLES.ADMIN].includes(session.role)) {
+          return forbiddenResponse();
+        }
+        return handleSyncDateAttendanceLogs(session, payload);
 
       case 'attendanceLogs.deleteMyLog':
         if (method !== 'DELETE' || ![ROLES.GURU, ROLES.ADMIN].includes(session.role)) {
@@ -1567,6 +1574,7 @@ function handleUpsertMyAttendanceLog(session, payload) {
     });
   }
 
+  var className = (sanitizeString(payload.class_name) || 'Kelas Umum').slice(0, 80);
   var jtmHours =
     status === 'sakit' || status === 'izin' ? 0 : sanitizeDecimalNonNegative(payload.jtm_hours, 0);
   var note = sanitizeString(payload.note || '').slice(0, 250);
@@ -1574,7 +1582,12 @@ function handleUpsertMyAttendanceLog(session, payload) {
 
   var existingLogs = readSheetRecords(SHEETS.ATTENDANCE_LOGS);
   var existing = existingLogs.find(function (l) {
-    return String(l.teacher_id) === targetTeacherId && String(l.date).trim() === rawDate;
+    var rowClass = (sanitizeString(l.class_name) || 'Kelas Umum').toLowerCase();
+    return (
+      String(l.teacher_id) === targetTeacherId &&
+      String(l.date).trim() === rawDate &&
+      rowClass === className.toLowerCase()
+    );
   });
 
   var savedLog;
@@ -1591,6 +1604,7 @@ function handleUpsertMyAttendanceLog(session, payload) {
         note: note,
         created_at: row.created_at || nowIso,
         updated_at: nowIso,
+        class_name: className,
       };
     });
   } else {
@@ -1605,6 +1619,7 @@ function handleUpsertMyAttendanceLog(session, payload) {
       note: note,
       created_at: nowIso,
       updated_at: nowIso,
+      class_name: className,
     };
     appendSheetRecord(SHEETS.ATTENDANCE_LOGS, savedLog);
   }
@@ -1614,6 +1629,109 @@ function handleUpsertMyAttendanceLog(session, payload) {
     ok: true,
     data: {
       log: savedLog,
+      attendanceSummary: summary,
+    },
+  });
+}
+
+function handleSyncDateAttendanceLogs(session, payload) {
+  var targetTeacherId = '';
+  if (session.role === ROLES.GURU) {
+    var ownTeacher = resolveOwnedTeacherRecord(session);
+    if (!ownTeacher) return forbiddenResponse();
+    targetTeacherId = String(ownTeacher.id);
+  } else {
+    targetTeacherId = sanitizeString(payload.teacher_id);
+  }
+
+  if (!targetTeacherId) {
+    return buildJsonResponse(400, { ok: false, error: 'Identitas guru tidak valid.' });
+  }
+
+  var rawDate = sanitizeString(payload.date);
+  var dateMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dateMatch) {
+    return buildJsonResponse(400, { ok: false, error: 'Format tanggal harus YYYY-MM-DD.' });
+  }
+
+  var yearNum = Number(dateMatch[1]);
+  var monthNum = Number(dateMatch[2]);
+  if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
+    return buildJsonResponse(400, { ok: false, error: 'Tanggal kehadiran tidak valid.' });
+  }
+
+  if (isPeriodPayrollLocked(monthNum, yearNum)) {
+    return buildJsonResponse(409, {
+      ok: false,
+      error: 'Periode penggajian bulan ini sudah diajukan/disetujui sehingga catatan kehadiran terkunci.',
+    });
+  }
+
+  var entries = Array.isArray(payload.entries) ? payload.entries : [];
+  var sanitizedEntries = [];
+  var seenClassKeys = {};
+
+  for (var i = 0; i < entries.length; i++) {
+    var entry = entries[i] || {};
+    var className = (sanitizeString(entry.class_name) || '').slice(0, 80);
+    if (!className) continue;
+    var classKey = className.toLowerCase();
+    if (seenClassKeys[classKey]) continue;
+    seenClassKeys[classKey] = true;
+
+    var status = normalizeAttendanceLogStatus(entry.status);
+    if (!status) {
+      return buildJsonResponse(400, {
+        ok: false,
+        error: 'Kondisi kehadiran kelas "' + className + '" tidak valid.',
+      });
+    }
+    var jtmHours =
+      status === 'sakit' || status === 'izin' ? 0 : sanitizeDecimalNonNegative(entry.jtm_hours, 0);
+    var note = sanitizeString(entry.note || '').slice(0, 250);
+
+    sanitizedEntries.push({
+      class_name: className,
+      status: status,
+      jtm_hours: jtmHours,
+      note: note,
+    });
+  }
+
+  // Hapus log lama pada tanggal tersebut lalu simpan ulang daftar kelas yang dicentang
+  var existingLogs = readSheetRecords(SHEETS.ATTENDANCE_LOGS).filter(function (l) {
+    return String(l.teacher_id) === targetTeacherId && String(l.date).trim() === rawDate;
+  });
+  existingLogs.forEach(function (oldLog) {
+    deleteSheetRecordById(SHEETS.ATTENDANCE_LOGS, oldLog.id);
+  });
+
+  var nowIso = new Date().toISOString();
+  var savedLogs = [];
+  sanitizedEntries.forEach(function (item) {
+    var created = {
+      id: Utilities.getUuid(),
+      teacher_id: targetTeacherId,
+      date: rawDate,
+      month: monthNum,
+      year: yearNum,
+      status: item.status,
+      jtm_hours: item.jtm_hours,
+      note: item.note,
+      created_at: nowIso,
+      updated_at: nowIso,
+      class_name: item.class_name,
+    };
+    appendSheetRecord(SHEETS.ATTENDANCE_LOGS, created);
+    savedLogs.push(created);
+  });
+
+  var summary = syncMonthlyAttendanceFromLogs(targetTeacherId, monthNum, yearNum);
+  return buildJsonResponse(200, {
+    ok: true,
+    data: {
+      date: rawDate,
+      logs: savedLogs,
       attendanceSummary: summary,
     },
   });

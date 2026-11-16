@@ -6,6 +6,15 @@
  * - izin  : counts as absent (0 present day, 1 absent day, 0 JTM)
  */
 
+export const DEFAULT_TEACHING_CLASSES = [
+  'Kelas VII A',
+  'Kelas VII B',
+  'Kelas VIII A',
+  'Kelas VIII B',
+  'Kelas IX A',
+  'Kelas IX B',
+];
+
 export const ATTENDANCE_CONDITIONS = [
   {
     id: 'hadir',
@@ -110,6 +119,24 @@ export function computeAttendanceBreakdownFromLogs(logs = []) {
     izin_count: izinCount,
     log_count: logs.length,
   };
+}
+
+export function computeClassBreakdownFromLogs(logs = []) {
+  const byClass = new Map();
+  for (const log of logs) {
+    const className = String(log.class_name || 'Kelas Umum').trim() || 'Kelas Umum';
+    if (!byClass.has(className)) {
+      byClass.set(className, []);
+    }
+    byClass.get(className).push(log);
+  }
+
+  return Array.from(byClass.entries())
+    .map(([className, classLogs]) => ({
+      class_name: className,
+      ...computeAttendanceBreakdownFromLogs(classLogs),
+    }))
+    .sort((a, b) => a.class_name.localeCompare(b.class_name, 'id'));
 }
 
 export function getTodayIsoDate() {

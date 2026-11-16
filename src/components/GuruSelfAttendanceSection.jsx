@@ -4,10 +4,13 @@ import {
   CheckCircle2,
   Clock,
   FileCheck2,
+  GraduationCap,
   Pencil,
+  Plus,
   RefreshCw,
   Save,
   Trash2,
+  X,
   XCircle,
 } from 'lucide-react';
 import api from '../services/gasApi';
@@ -16,13 +19,17 @@ import ConfirmModal from './ConfirmModal';
 import { MONTHS_ID, formatRupiah, getSingleMonthName } from '../utils/formatters';
 import {
   ATTENDANCE_CONDITIONS,
+  DEFAULT_TEACHING_CLASSES,
   computeAttendanceBreakdownFromLogs,
+  computeClassBreakdownFromLogs,
   formatAttendanceNumber,
   formatDateIndo,
   getAttendanceConditionMeta,
   getTodayIsoDate,
   normalizeAttendanceStatus,
 } from '../utils/attendanceHelpers';
+
+const CUSTOM_CLASSES_STORAGE_KEY = 'sipayroll_guru_classes_v1';
 
 const TONE_BADGE_CLASS = {
   good: 'nim-badge nim-badge--good',
@@ -31,7 +38,45 @@ const TONE_BADGE_CLASS = {
   neutral: 'nim-badge',
 };
 
-const QUICK_JTM_PRESETS = [0, 2, 4, 6, 8];
+function loadStoredClassList() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_CLASSES_STORAGE_KEY);
+    if (!raw) return DEFAULT_TEACHING_CLASSES;
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed;
+    }
+  } catch {
+    // Ignore storage read error
+  }
+  return DEFAULT_TEACHING_CLASSES;
+}
+
+function saveStoredClassList(list) {
+  try {
+    localStorage.setItem(CUSTOM_CLASSES_STORAGE_KEY, JSON.stringify(list));
+  } catch {
+    // Ignore storage write error
+  }
+}
+
+function createDefaultClassRowState(existingLog = null) {
+  if (existingLog) {
+    const st = normalizeAttendanceStatus(existingLog.status);
+    return {
+      checked: true,
+      status: st,
+      jtm_hours: st === 'sakit' || st === 'izin' ? 0 : Number(existingLog.jtm_hours || 0),
+      note: existingLog.note || '',
+    };
+  }
+  return {
+    checked: false,
+    status: 'hadir',
+    jtm_hours: 2,
+    note: '',
+  };
+}
 
 export function GuruSelfAttendanceSection({
   teacherProfile,
@@ -50,9 +95,9 @@ export function GuruSelfAttendanceSection({
   const [saving, setSaving] = useState(false);
 
   const [dateInput, setDateInput] = useState(todayIso);
-  const [statusInput, setStatusInput] = useState('hadir');
-  const [jtmInput, setJtmInput] = useState(4);
-  const [noteInput, setNoteInput] = useState('');
+  const [classList, setClassList] = useState(() => loadStoredClassList());
+  const [newClassInput, setNewClassInput] = useState('');
+  const [classRowsState, setClassRowsState] = useState({});
 
   const [deleteTarget, setDeleteTarget] = useState(null);
 
@@ -67,6 +112,25 @@ export function GuruSelfAttendanceSection({
       setLogs(normalizedLogs);
       setAdminSummary(Array.isArray(attRows) && attRows.length > 0 ? attRows[0] : null);
       onLogsCountChange?.(normalizedLogs.length);
+
+      // Pastikan seluruh nama kelas yang ada pada riwayat log ikut muncul di checklist
+      const discoveredClasses = normalizedLogs
+        .map((l) => String(l.class_name || '').trim())
+        .filter(Boolean);
+      if (discoveredClasses.length > 0) {
+        setClassList((prev) => {
+          const merged = [...prev];
+          let changed = false;
+          for (const cls of discoveredClasses) {
+            if (!merged.some((item) => item.toLowerCase() === cls.toLowerCase())) {
+              merged.push(cls);
+              changed = true;
+            }
+          }
+          if (changed) saveStoredClassList(merged);
+          return merged;
+        });
+      }
     } catch (err) {
       notify.error(err.message || 'Gagal memuat catatan kehadiran & JTM.');
     } finally {
@@ -78,20 +142,20 @@ export function GuruSelfAttendanceSection({
     loadPeriodAttendance();
   }, [loadPeriodAttendance]);
 
-  const existingLogForDate = useMemo(
-    () => logs.find((item) => String(item.date).trim() === String(dateInput).trim()) || null,
-    [logs, dateInput]
-  );
-
-  // Sinkronkan isi form ketika memilih tanggal yang sudah pernah dicatat
-  const populateFormFromLog = useCallback((logRow) => {
-    if (!logRow) return;
-    const st = normalizeAttendanceStatus(logRow.status);
-    setDateInput(logRow.date);
-    setStatusInput(st);
-    setJtmInput(st === 'sakit' || st === 'izin' ? 0 : Number(logRow.jtm_hours || 0));
-    setNoteInput(logRow.note || '');
-  }, []);
+  // Sinkronkan state checklist per-kelas setiap kali `dateInput`, `logs`, atau `classList` berubah
+  useEffect(() => {
+    const logsForDate = logs.filter(
+      (item) => String(item.date || '').trim() === String(dateInput).trim()
+    );
+    const nextState = {};
+    for (const cls of classList) {
+      const match = logsForDate.find(
+        (l) => String(l.class_name || 'Kelas Umum').trim().toLowerCase() === cls.toLowerCase()
+      );
+      nextState[cls] = createDefaultClassRowState(match || null);
+    }
+    setClassRowsState(nextState);
+  }, [dateInput, logs, classList]);
 
   const handleDateChange = (nextDate) => {
     setDateInput(nextDate);
@@ -104,52 +168,181 @@ export function GuruSelfAttendanceSection({
         setSelectedMonth(mo);
       }
     }
-    const matched = logs.find((item) => String(item.date).trim() === String(nextDate).trim());
-    if (matched) {
-      populateFormFromLog(matched);
-    }
   };
 
-  const handleSelectStatus = (nextStatusId) => {
+  const handleToggleClassCheck = (clsName) => {
+    setClassRowsState((prev) => {
+      const cur = prev[clsName] || createDefaultClassRowState(null);
+      return {
+        ...prev,
+        [clsName]: { ...cur, checked: !cur.checked },
+      };
+    });
+  };
+
+  const handleChangeClassCondition = (clsName, nextStatusId) => {
     const meta = getAttendanceConditionMeta(nextStatusId);
-    setStatusInput(meta.id);
-    if (!meta.allowsJtm) {
-      setJtmInput(0);
-    } else if (existingLogForDate && existingLogForDate.status === meta.id) {
-      setJtmInput(Number(existingLogForDate.jtm_hours || 0));
-    } else if (meta.id === 'tugas') {
-      setJtmInput(0);
-    } else if (Number(jtmInput) === 0) {
-      setJtmInput(meta.defaultJtm);
-    }
+    setClassRowsState((prev) => {
+      const cur = prev[clsName] || createDefaultClassRowState(null);
+      let nextJtm = cur.jtm_hours;
+      if (!meta.allowsJtm) {
+        nextJtm = 0;
+      } else if (meta.id === 'tugas') {
+        nextJtm = 0;
+      } else if (Number(cur.jtm_hours) === 0) {
+        nextJtm = 2;
+      }
+      return {
+        ...prev,
+        [clsName]: {
+          ...cur,
+          checked: true,
+          status: meta.id,
+          jtm_hours: nextJtm,
+        },
+      };
+    });
   };
 
-  const handleSaveLog = async (e) => {
+  const handleUpdateClassField = (clsName, field, value) => {
+    setClassRowsState((prev) => {
+      const cur = prev[clsName] || createDefaultClassRowState(null);
+      return {
+        ...prev,
+        [clsName]: {
+          ...cur,
+          [field]: value,
+        },
+      };
+    });
+  };
+
+  const allChecked =
+    classList.length > 0 && classList.every((cls) => Boolean(classRowsState[cls]?.checked));
+
+  const handleToggleAllClasses = () => {
+    const targetChecked = !allChecked;
+    setClassRowsState((prev) => {
+      const next = {};
+      for (const cls of classList) {
+        const cur = prev[cls] || createDefaultClassRowState(null);
+        next[cls] = { ...cur, checked: targetChecked };
+      }
+      return next;
+    });
+  };
+
+  const handleApplyStatusToChecked = (statusId) => {
+    const meta = getAttendanceConditionMeta(statusId);
+    setClassRowsState((prev) => {
+      const next = { ...prev };
+      for (const cls of classList) {
+        const cur = prev[cls];
+        if (!cur?.checked) continue;
+        next[cls] = {
+          ...cur,
+          status: meta.id,
+          jtm_hours: !meta.allowsJtm
+            ? 0
+            : meta.id === 'tugas'
+            ? 0
+            : Number(cur.jtm_hours) > 0
+            ? cur.jtm_hours
+            : 2,
+        };
+      }
+      return next;
+    });
+  };
+
+  const handleAddCustomClass = (e) => {
+    e.preventDefault();
+    const clean = newClassInput.trim();
+    if (!clean) return;
+    const exists = classList.find((c) => c.toLowerCase() === clean.toLowerCase());
+    if (exists) {
+      setClassRowsState((prev) => ({
+        ...prev,
+        [exists]: { ...(prev[exists] || createDefaultClassRowState(null)), checked: true },
+      }));
+      setNewClassInput('');
+      return;
+    }
+    const nextList = [...classList, clean];
+    setClassList(nextList);
+    saveStoredClassList(nextList);
+    setClassRowsState((prev) => ({
+      ...prev,
+      [clean]: { ...createDefaultClassRowState(null), checked: true },
+    }));
+    setNewClassInput('');
+  };
+
+  const handleRemoveClassOption = (clsName) => {
+    if (classList.length <= 1) {
+      notify.warn('Minimal harus tersisa 1 kelas pada daftar.');
+      return;
+    }
+    const nextList = classList.filter((c) => c !== clsName);
+    setClassList(nextList);
+    saveStoredClassList(nextList);
+  };
+
+  const checkedEntries = useMemo(() => {
+    return classList
+      .filter((cls) => Boolean(classRowsState[cls]?.checked))
+      .map((cls) => {
+        const row = classRowsState[cls];
+        const meta = getAttendanceConditionMeta(row.status);
+        return {
+          class_name: cls,
+          status: meta.id,
+          jtm_hours: meta.allowsJtm ? Math.max(0, Number(row.jtm_hours || 0)) : 0,
+          note: String(row.note || '').trim(),
+        };
+      });
+  }, [classList, classRowsState]);
+
+  const selectedDateContribution = useMemo(
+    () => computeAttendanceBreakdownFromLogs(checkedEntries),
+    [checkedEntries]
+  );
+
+  const logsExistingOnSelectedDate = useMemo(
+    () => logs.filter((l) => String(l.date).trim() === String(dateInput).trim()).length,
+    [logs, dateInput]
+  );
+
+  const handleSaveDateChecklist = async (e) => {
     e.preventDefault();
     if (!dateInput) {
       notify.warn('Pilih tanggal kehadiran terlebih dahulu.');
       return;
     }
-
-    const condMeta = getAttendanceConditionMeta(statusInput);
-    const finalJtm = condMeta.allowsJtm ? Math.max(0, Number(jtmInput || 0)) : 0;
+    if (checkedEntries.length === 0 && logsExistingOnSelectedDate === 0) {
+      notify.warn('Centang minimal 1 kelas sebelum menyimpan.');
+      return;
+    }
 
     setSaving(true);
     try {
-      await api.post('attendanceLogs.upsertMyLog', {
+      await api.post('attendanceLogs.syncDateLogs', {
         date: dateInput,
-        status: condMeta.id,
-        jtm_hours: finalJtm,
-        note: noteInput.trim(),
+        entries: checkedEntries,
       });
-      notify.success(
-        `Catatan ${formatDateIndo(dateInput)} (${condMeta.label}) tersimpan & otomatis masuk ke rekap Admin.`
-      );
-      setNoteInput('');
+      if (checkedEntries.length === 0) {
+        notify.info(`Catatan kelas pada ${formatDateIndo(dateInput)} dikosongkan.`);
+      } else {
+        notify.success(
+          `${checkedEntries.length} kelas (${formatDateIndo(
+            dateInput
+          )}) tersimpan & langsung masuk ke rekap Admin.`
+        );
+      }
       await loadPeriodAttendance();
       onSyncComplete?.();
     } catch (err) {
-      notify.error(err.message || 'Gagal menyimpan catatan kehadiran mandiri.');
+      notify.error(err.message || 'Gagal menyimpan kehadiran per-kelas.');
     } finally {
       setSaving(false);
     }
@@ -159,7 +352,9 @@ export function GuruSelfAttendanceSection({
     if (!deleteTarget) return;
     try {
       await api.delete('attendanceLogs.deleteMyLog', { id: deleteTarget.id });
-      notify.success(`Catatan tanggal ${formatDateIndo(deleteTarget.date)} dihapus.`);
+      notify.success(
+        `Catatan ${deleteTarget.class_name || 'Kelas'} (${formatDateIndo(deleteTarget.date)}) dihapus.`
+      );
       setDeleteTarget(null);
       await loadPeriodAttendance();
       onSyncComplete?.();
@@ -169,8 +364,7 @@ export function GuruSelfAttendanceSection({
   };
 
   const breakdown = useMemo(() => computeAttendanceBreakdownFromLogs(logs), [logs]);
-  const activeCondition = getAttendanceConditionMeta(statusInput);
-  const previewJtm = activeCondition.allowsJtm ? Math.max(0, Number(jtmInput || 0)) : 0;
+  const classBreakdown = useMemo(() => computeClassBreakdownFromLogs(logs), [logs]);
   const hourlyRate = Number(teacherProfile?.salary_component?.hourly_rate || 0);
 
   return (
@@ -180,7 +374,7 @@ export function GuruSelfAttendanceSection({
         <div>
           <div className="flex flex-wrap items-center gap-2">
             <h2 className="text-base sm:text-lg font-bold text-[var(--ink)]">
-              Catat Kehadiran &amp; JTM Mandiri
+              Catat Kehadiran Per-Kelas &amp; JTM
             </h2>
             <span className="nim-badge nim-badge--good">
               <CheckCircle2 className="h-3 w-3" />
@@ -188,8 +382,8 @@ export function GuruSelfAttendanceSection({
             </span>
           </div>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            Setiap catatan harian otomatis diakumulasi ke menu <strong>Kehadiran &amp; JTM</strong>{' '}
-            Bendahara (Hadir = 1, Tugas = 0,5, Sakit/Izin = tidak hadir).
+            Centang kelas yang diampu pada tanggal tersebut, pilih kondisi (Hadir = 1, Tugas =
+            0,5, Sakit/Izin = tidak hadir), lalu simpan.
           </p>
         </div>
 
@@ -243,7 +437,7 @@ export function GuruSelfAttendanceSection({
             </span>
           </div>
           <p className="nim-kpi__value mt-2 tabular-nums">
-            {formatAttendanceNumber(breakdown.present_days)} Hari
+            {formatAttendanceNumber(breakdown.present_days)}
           </p>
           <p className="nim-kpi__sub mt-1">
             Hadir {breakdown.hadir_count}×1 • Tugas {breakdown.tugas_count}×0,5
@@ -260,7 +454,7 @@ export function GuruSelfAttendanceSection({
               <XCircle className="h-4 w-4" />
             </span>
           </div>
-          <p className="nim-kpi__value mt-2 tabular-nums">{breakdown.absent_days} Hari</p>
+          <p className="nim-kpi__value mt-2 tabular-nums">{breakdown.absent_days}</p>
           <p className="nim-kpi__sub mt-1">
             Sakit {breakdown.sakit_count} • Izin {breakdown.izin_count} (nilai 0)
           </p>
@@ -282,7 +476,7 @@ export function GuruSelfAttendanceSection({
           <p className="nim-kpi__sub mt-1 truncate">
             {hourlyRate > 0
               ? `Estimasi: ${formatRupiah(breakdown.total_jtm * hourlyRate)}`
-              : `Periode ${getSingleMonthName(selectedMonth)} ${selectedYear}`}
+              : `${classBreakdown.length} Kelas Tercatat`}
           </p>
         </div>
       </div>
@@ -298,11 +492,11 @@ export function GuruSelfAttendanceSection({
             <span>
               Rekap tersimpan di Admin ({getSingleMonthName(selectedMonth)} {selectedYear}):{' '}
               <strong className="text-[var(--ink)] tabular-nums">
-                Hadir {formatAttendanceNumber(adminSummary.present_days)} hr
+                Hadir {formatAttendanceNumber(adminSummary.present_days)}
               </strong>{' '}
               •{' '}
               <strong className="text-[var(--ink)] tabular-nums">
-                Tidak Hadir {formatAttendanceNumber(adminSummary.absent_days)} hr
+                Tidak Hadir {formatAttendanceNumber(adminSummary.absent_days)}
               </strong>{' '}
               •{' '}
               <strong className="text-[var(--accent-text)] tabular-nums">
@@ -311,181 +505,251 @@ export function GuruSelfAttendanceSection({
             </span>
           </div>
           <span className="text-[11px] text-[var(--muted)]">
-            {logs.length} catatan harian tercatat
+            {logs.length} entri kelas tercatat
           </span>
         </div>
       )}
 
-      {/* Main Content Split: Self Input Form + Monthly Log History */}
+      {/* Checklist Input Form + Per-Class Summary */}
       <div className="fluid-container items-start">
-        {/* Form Card */}
-        <form onSubmit={handleSaveLog} className="fluid-item nim-glass nim-card space-y-4">
+        {/* Per-Class Checkbox Form */}
+        <form
+          onSubmit={handleSaveDateChecklist}
+          className="fluid-item nim-glass nim-card space-y-4"
+        >
           <div
             className="flex flex-wrap items-center justify-between gap-2 pb-3"
             style={{ borderBottom: '1px solid var(--line)' }}
           >
             <div>
               <h3 className="text-sm sm:text-base font-bold text-[var(--ink)]">
-                Form Catatan Harian
+                Checklist Kehadiran Per-Kelas
               </h3>
               <p className="text-[11px] text-[var(--muted)]">
-                Pilih tanggal, kondisi kehadiran, dan jumlah jam mengajar.
+                Centang kelas yang diajar/diabsen pada tanggal pilihan Anda.
               </p>
             </div>
-            {existingLogForDate && (
-              <span className="nim-badge nim-badge--warn">Mode Edit Tanggal Ini</span>
+            {logsExistingOnSelectedDate > 0 && (
+              <span className="nim-badge nim-badge--warn">
+                {logsExistingOnSelectedDate} kelas tersimpan di tanggal ini
+              </span>
             )}
           </div>
 
-          {/* Date Picker */}
-          <div className="flex flex-wrap items-end gap-2">
-            <div className="flex-1 min-w-[180px]">
-              <label
-                htmlFor="guru-att-date"
-                className="block text-xs font-semibold text-[var(--ink-2)]"
+          {/* Date Picker + Select All */}
+          <div className="flex flex-wrap items-end justify-between gap-2">
+            <div className="flex flex-wrap items-end gap-2">
+              <div>
+                <label
+                  htmlFor="guru-att-date"
+                  className="block text-xs font-semibold text-[var(--ink-2)]"
+                >
+                  Tanggal
+                </label>
+                <input
+                  id="guru-att-date"
+                  type="date"
+                  required
+                  value={dateInput}
+                  onChange={(e) => handleDateChange(e.target.value)}
+                  className="nim-input mt-1 !w-auto text-xs font-semibold tabular-nums"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => handleDateChange(getTodayIsoDate())}
+                className="nim-btn nim-btn--ghost text-xs"
               >
-                Tanggal Kehadiran
-              </label>
-              <input
-                id="guru-att-date"
-                type="date"
-                required
-                value={dateInput}
-                onChange={(e) => handleDateChange(e.target.value)}
-                className="nim-input mt-1 text-xs font-semibold tabular-nums"
-              />
+                Hari Ini
+              </button>
             </div>
+
+            <label className="inline-flex items-center gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] px-3 py-1.5 text-xs font-semibold text-[var(--ink-2)] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={allChecked}
+                onChange={handleToggleAllClasses}
+                className="h-4 w-4 rounded accent-emerald-600"
+              />
+              <span>Centang Semua Kelas</span>
+            </label>
+          </div>
+
+          {/* Quick Bulk Condition Buttons when >= 1 class checked */}
+          {checkedEntries.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 rounded-xl bg-slate-50 px-3 py-2 border border-slate-200/80 text-[11px]">
+              <span className="font-semibold text-slate-600 mr-1">
+                Set kondisi {checkedEntries.length} kelas terpilih:
+              </span>
+              {ATTENDANCE_CONDITIONS.map((cond) => (
+                <button
+                  key={cond.id}
+                  type="button"
+                  onClick={() => handleApplyStatusToChecked(cond.id)}
+                  className="rounded-lg border border-slate-200 bg-white px-2 py-0.5 font-semibold text-slate-700 hover:border-emerald-400 hover:text-emerald-700"
+                >
+                  {cond.label}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Class Rows Checklist */}
+          <div className="space-y-2 max-h-[420px] overflow-y-auto pr-0.5">
+            {classList.map((clsName) => {
+              const rowState = classRowsState[clsName] || createDefaultClassRowState(null);
+              const condMeta = getAttendanceConditionMeta(rowState.status);
+
+              return (
+                <div
+                  key={clsName}
+                  className={`rounded-xl border p-3 transition-all ${
+                    rowState.checked
+                      ? 'border-emerald-500/80 bg-emerald-50/40'
+                      : 'border-[var(--line)] bg-[var(--surface)] opacity-85'
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="inline-flex items-center gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={rowState.checked}
+                        onChange={() => handleToggleClassCheck(clsName)}
+                        className="h-4 w-4 rounded accent-emerald-600"
+                      />
+                      <span className="flex items-center gap-1.5 text-xs sm:text-sm font-bold text-[var(--ink)]">
+                        <GraduationCap className="h-4 w-4 text-emerald-700" />
+                        {clsName}
+                      </span>
+                    </label>
+
+                    <div className="flex items-center gap-1.5">
+                      {rowState.checked ? (
+                        <span className={`${TONE_BADGE_CLASS[condMeta.tone]} !text-[10.5px]`}>
+                          {condMeta.label} • +{formatAttendanceNumber(condMeta.presentWeight)} •{' '}
+                          {formatAttendanceNumber(condMeta.allowsJtm ? rowState.jtm_hours : 0)} JTM
+                        </span>
+                      ) : (
+                        <span className="text-[11px] text-[var(--muted)]">Tidak dipilih</span>
+                      )}
+                      {classList.length > 1 && (
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveClassOption(clsName)}
+                          title={`Hapus ${clsName} dari daftar`}
+                          className="rounded-lg p-1 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {rowState.checked && (
+                    <div className="mt-2.5 pt-2.5 border-t border-emerald-200/70 space-y-2.5">
+                      {/* Condition Checkboxes */}
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {ATTENDANCE_CONDITIONS.map((cond) => {
+                          const isSelected = rowState.status === cond.id;
+                          return (
+                            <label
+                              key={cond.id}
+                              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1 text-[11px] font-semibold cursor-pointer select-none transition-colors ${
+                                isSelected
+                                  ? 'border-emerald-500 bg-white text-emerald-800 shadow-2xs'
+                                  : 'border-slate-200 bg-white/70 text-slate-600 hover:border-slate-300'
+                              }`}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => handleChangeClassCondition(clsName, cond.id)}
+                                className="h-3.5 w-3.5 rounded accent-emerald-600"
+                              />
+                              <span>{cond.label}</span>
+                              <span className="text-[10px] opacity-75">
+                                ({cond.id === 'hadir' ? '1' : cond.id === 'tugas' ? '0,5' : '0'})
+                              </span>
+                            </label>
+                          );
+                        })}
+                      </div>
+
+                      {/* JTM & Optional Note */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="flex items-center gap-1.5">
+                          <label className="text-[11px] font-semibold text-[var(--ink-2)]">
+                            JTM:
+                          </label>
+                          <input
+                            type="number"
+                            min="0"
+                            max="24"
+                            step="0.5"
+                            disabled={!condMeta.allowsJtm}
+                            value={condMeta.allowsJtm ? rowState.jtm_hours : 0}
+                            onChange={(e) =>
+                              handleUpdateClassField(clsName, 'jtm_hours', e.target.value)
+                            }
+                            className="nim-input !w-20 !py-1 text-xs font-bold tabular-nums disabled:opacity-60"
+                          />
+                          <span className="text-[11px] text-[var(--muted)]">jam</span>
+                        </div>
+
+                        <input
+                          type="text"
+                          maxLength={200}
+                          value={rowState.note}
+                          onChange={(e) => handleUpdateClassField(clsName, 'note', e.target.value)}
+                          placeholder="Catatan singkat (opsional)..."
+                          className="nim-input flex-1 min-w-[160px] !py-1 text-xs"
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Add Custom Class Inline */}
+          <div className="flex items-center gap-2 pt-1">
+            <input
+              type="text"
+              value={newClassInput}
+              onChange={(e) => setNewClassInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  handleAddCustomClass(e);
+                }
+              }}
+              placeholder="Tambah nama kelas lain (misal: X IPA 1)..."
+              className="nim-input flex-1 !py-1.5 text-xs"
+            />
             <button
               type="button"
-              onClick={() => handleDateChange(getTodayIsoDate())}
-              className="nim-btn nim-btn--ghost text-xs"
+              onClick={handleAddCustomClass}
+              className="nim-btn nim-btn--ghost !py-1.5 text-xs shrink-0"
             >
-              Hari Ini
+              <Plus className="h-3.5 w-3.5" />
+              <span>Tambah Kelas</span>
             </button>
           </div>
 
-          {/* Condition Options */}
-          <div>
-            <span className="block text-xs font-semibold text-[var(--ink-2)] mb-1.5">
-              Kondisi Kehadiran
-            </span>
-            <div className="grid grid-cols-2 gap-2">
-              {ATTENDANCE_CONDITIONS.map((cond) => {
-                const isSelected = statusInput === cond.id;
-                return (
-                  <button
-                    key={cond.id}
-                    type="button"
-                    onClick={() => handleSelectStatus(cond.id)}
-                    className={`rounded-xl border p-2.5 text-left transition-all ${
-                      isSelected
-                        ? 'border-emerald-500 bg-emerald-50/70 ring-2 ring-emerald-500/20'
-                        : 'border-[var(--line)] bg-[var(--surface)] hover:border-slate-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between gap-1.5">
-                      <span className="text-xs font-bold text-[var(--ink)]">{cond.label}</span>
-                      <span className={`${TONE_BADGE_CLASS[cond.tone]} !text-[10px]`}>
-                        {cond.badgeText}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-[10.5px] leading-snug text-[var(--muted)]">
-                      {cond.description}
-                    </p>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* JTM Hours Input */}
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <label
-                htmlFor="guru-att-jtm"
-                className="block text-xs font-semibold text-[var(--ink-2)]"
-              >
-                Jumlah Jam Tatap Muka (JTM)
-              </label>
-              {!activeCondition.allowsJtm && (
-                <span className="text-[11px] font-medium text-[var(--bad-text)]">
-                  Terkunci 0 JTM ({activeCondition.label})
-                </span>
-              )}
-            </div>
-
-            <div className="mt-1.5 flex flex-wrap items-center gap-2">
-              <input
-                id="guru-att-jtm"
-                type="number"
-                min="0"
-                max="24"
-                step="0.5"
-                disabled={!activeCondition.allowsJtm}
-                value={activeCondition.allowsJtm ? jtmInput : 0}
-                onChange={(e) => setJtmInput(e.target.value)}
-                className="nim-input !w-28 text-xs font-bold tabular-nums disabled:opacity-60"
-              />
-              {activeCondition.allowsJtm && (
-                <div className="flex flex-wrap items-center gap-1">
-                  {QUICK_JTM_PRESETS.map((preset) => (
-                    <button
-                      key={preset}
-                      type="button"
-                      onClick={() => setJtmInput(preset)}
-                      className={`rounded-lg border px-2 py-1 text-[11px] font-semibold tabular-nums transition-colors ${
-                        Number(jtmInput) === preset
-                          ? 'border-indigo-500 bg-indigo-50 text-indigo-700'
-                          : 'border-[var(--line)] bg-[var(--surface)] text-[var(--muted)] hover:text-[var(--ink)]'
-                      }`}
-                    >
-                      {preset} jam
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Note Input */}
-          <div>
-            <label
-              htmlFor="guru-att-note"
-              className="block text-xs font-semibold text-[var(--ink-2)]"
-            >
-              Keterangan / Aktivitas (Opsional)
-            </label>
-            <input
-              id="guru-att-note"
-              type="text"
-              maxLength={250}
-              value={noteInput}
-              onChange={(e) => setNoteInput(e.target.value)}
-              placeholder={
-                statusInput === 'tugas'
-                  ? 'Contoh: Tugas rapat MGMP / dinas luar'
-                  : statusInput === 'sakit' || statusInput === 'izin'
-                  ? 'Contoh: Izin keperluan keluarga / surat dokter'
-                  : 'Contoh: Mengajar kelas X & XI'
-              }
-              className="nim-input mt-1 text-xs"
-            />
-          </div>
-
-          {/* Contribution Preview */}
+          {/* Contribution Preview & Submit */}
           <div className="nim-card-well px-3.5 py-2.5 text-[11.5px] text-[var(--ink-2)] flex flex-wrap items-center justify-between gap-2">
-            <span>Nilai masuk rekap Admin:</span>
+            <span>
+              Total tanggal ini ({checkedEntries.length} kelas):
+            </span>
             <span className="font-bold text-[var(--ink)] tabular-nums">
-              +{formatAttendanceNumber(activeCondition.presentWeight)} Hadir •{' '}
-              {activeCondition.absentWeight} Tidak Hadir • {formatAttendanceNumber(previewJtm)} JTM
+              +{formatAttendanceNumber(selectedDateContribution.present_days)} Hadir •{' '}
+              {selectedDateContribution.absent_days} Tidak Hadir •{' '}
+              {formatAttendanceNumber(selectedDateContribution.total_jtm)} JTM
             </span>
           </div>
 
-          <button
-            type="submit"
-            disabled={saving}
-            className="nim-btn nim-btn--primary w-full"
-          >
+          <button type="submit" disabled={saving} className="nim-btn nim-btn--primary w-full">
             {saving ? (
               <>
                 <RefreshCw className="h-3.5 w-3.5 animate-spin" />
@@ -494,119 +758,173 @@ export function GuruSelfAttendanceSection({
             ) : (
               <>
                 <Save className="h-3.5 w-3.5" />
-                <span>
-                  {existingLogForDate
-                    ? 'Perbarui Catatan Tanggal Ini'
-                    : 'Simpan Catatan & Masuk Rekap Admin'}
-                </span>
+                <span>Simpan Kehadiran Per-Kelas &amp; Masuk Rekap Admin</span>
               </>
             )}
           </button>
         </form>
 
-        {/* Daily History Card */}
-        <div className="fluid-item nim-glass nim-card space-y-3">
-          <div
-            className="flex items-center justify-between gap-2 pb-3"
-            style={{ borderBottom: '1px solid var(--line)' }}
-          >
-            <div>
+        {/* Right Column: Per-Class Breakdown & Daily Log History */}
+        <div className="fluid-item space-y-4">
+          {/* Per-Class Summary Card */}
+          <div className="nim-glass nim-card space-y-3">
+            <div
+              className="flex items-center justify-between gap-2 pb-2.5"
+              style={{ borderBottom: '1px solid var(--line)' }}
+            >
               <h3 className="text-sm sm:text-base font-bold text-[var(--ink)]">
-                Riwayat Catatan ({getSingleMonthName(selectedMonth)} {selectedYear})
+                Rekap Per-Kelas ({getSingleMonthName(selectedMonth)} {selectedYear})
               </h3>
-              <p className="text-[11px] text-[var(--muted)]">
-                Klik ikon edit untuk mengubah kondisi atau jam JTM pada tanggal tertentu.
-              </p>
+              <span className="nim-badge nim-badge--accent tabular-nums">
+                {classBreakdown.length} Kelas
+              </span>
             </div>
-            <span className="nim-badge nim-badge--accent tabular-nums">{logs.length} Hari</span>
+
+            {classBreakdown.length === 0 ? (
+              <p className="text-xs text-[var(--muted)]">
+                Belum ada kelas yang dicatat pada periode ini.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {classBreakdown.map((cb) => (
+                  <div
+                    key={cb.class_name}
+                    className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-2.5 text-xs space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-1.5">
+                      <span className="font-bold text-[var(--ink)] truncate">
+                        {cb.class_name}
+                      </span>
+                      <span className="font-bold text-[var(--accent-text)] tabular-nums shrink-0">
+                        {formatAttendanceNumber(cb.total_jtm)} JTM
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-[var(--muted)] tabular-nums">
+                      Nilai hadir:{' '}
+                      <strong className="text-[var(--ink)]">
+                        {formatAttendanceNumber(cb.present_days)}
+                      </strong>{' '}
+                      • Tidak hadir:{' '}
+                      <strong className="text-[var(--ink)]">{cb.absent_days}</strong>
+                    </p>
+                    <p className="text-[10.5px] text-[var(--muted)] tabular-nums">
+                      Hadir {cb.hadir_count} • Tugas {cb.tugas_count} • Sakit {cb.sakit_count} •
+                      Izin {cb.izin_count}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
 
-          {loading ? (
-            <div className="py-8 text-center text-xs text-[var(--muted)]">
-              Memuat catatan kehadiran...
+          {/* Daily Log History Card */}
+          <div className="nim-glass nim-card space-y-3">
+            <div
+              className="flex items-center justify-between gap-2 pb-2.5"
+              style={{ borderBottom: '1px solid var(--line)' }}
+            >
+              <div>
+                <h3 className="text-sm sm:text-base font-bold text-[var(--ink)]">
+                  Riwayat Catatan Per-Kelas
+                </h3>
+                <p className="text-[11px] text-[var(--muted)]">
+                  Klik Edit untuk memuat ulang checklist tanggal tersebut.
+                </p>
+              </div>
+              <span className="nim-badge nim-badge--accent tabular-nums">{logs.length} Entri</span>
             </div>
-          ) : logs.length === 0 ? (
-            <div className="nim-card-well p-6 text-center text-xs text-[var(--muted)]">
-              Belum ada catatan kehadiran mandiri pada bulan {getSingleMonthName(selectedMonth)}{' '}
-              {selectedYear}. Isi formulir di sebelah untuk mulai mencatat.
-            </div>
-          ) : (
-            <div className="space-y-2 max-h-[520px] overflow-y-auto pr-0.5">
-              {logs.map((log) => {
-                const cond = getAttendanceConditionMeta(log.status);
-                const isActiveDate = String(log.date) === String(dateInput);
-                return (
-                  <div
-                    key={log.id}
-                    className={`rounded-xl border p-3 transition-colors ${
-                      isActiveDate
-                        ? 'border-indigo-300 bg-indigo-50/40'
-                        : 'border-[var(--line)] bg-[var(--surface)]'
-                    }`}
-                  >
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div className="space-y-1 min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="text-xs font-bold text-[var(--ink)]">
-                            {formatDateIndo(log.date)}
-                          </span>
-                          <span className={TONE_BADGE_CLASS[cond.tone]}>
-                            {cond.label} • {cond.badgeText}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-[var(--muted)] tabular-nums">
-                          Nilai hadir:{' '}
-                          <strong className="text-[var(--ink)]">
-                            +{formatAttendanceNumber(cond.presentWeight)}
-                          </strong>{' '}
-                          • Tidak hadir:{' '}
-                          <strong className="text-[var(--ink)]">{cond.absentWeight}</strong> • JTM:{' '}
-                          <strong className="text-[var(--accent-text)]">
-                            {formatAttendanceNumber(cond.allowsJtm ? log.jtm_hours : 0)} jam
-                          </strong>
-                        </p>
-                        {log.note && (
-                          <p className="text-[11px] text-[var(--ink-2)] break-words">
-                            “{log.note}”
-                          </p>
-                        )}
-                      </div>
 
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => populateFormFromLog(log)}
-                          title="Edit catatan ini"
-                          className="rounded-lg border border-[var(--line)] bg-white p-1.5 text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteTarget(log)}
-                          title="Hapus catatan ini"
-                          className="rounded-lg border border-[var(--line)] bg-white p-1.5 text-slate-500 hover:border-rose-300 hover:text-rose-600"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
+            {loading ? (
+              <div className="py-8 text-center text-xs text-[var(--muted)]">
+                Memuat catatan kehadiran...
+              </div>
+            ) : logs.length === 0 ? (
+              <div className="nim-card-well p-6 text-center text-xs text-[var(--muted)]">
+                Belum ada catatan kehadiran pada bulan {getSingleMonthName(selectedMonth)}{' '}
+                {selectedYear}.
+              </div>
+            ) : (
+              <div className="space-y-2 max-h-[380px] overflow-y-auto pr-0.5">
+                {logs.map((log) => {
+                  const cond = getAttendanceConditionMeta(log.status);
+                  const isActiveDate = String(log.date) === String(dateInput);
+                  return (
+                    <div
+                      key={log.id}
+                      className={`rounded-xl border p-3 transition-colors ${
+                        isActiveDate
+                          ? 'border-indigo-300 bg-indigo-50/40'
+                          : 'border-[var(--line)] bg-[var(--surface)]'
+                      }`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-2">
+                        <div className="space-y-1 min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-xs font-bold text-[var(--ink)]">
+                              {formatDateIndo(log.date)}
+                            </span>
+                            <span className="nim-badge nim-badge--accent !text-[10.5px]">
+                              {log.class_name || 'Kelas Umum'}
+                            </span>
+                            <span className={`${TONE_BADGE_CLASS[cond.tone]} !text-[10.5px]`}>
+                              {cond.label}
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-[var(--muted)] tabular-nums">
+                            Nilai hadir:{' '}
+                            <strong className="text-[var(--ink)]">
+                              +{formatAttendanceNumber(cond.presentWeight)}
+                            </strong>{' '}
+                            • Tidak hadir:{' '}
+                            <strong className="text-[var(--ink)]">{cond.absentWeight}</strong> •
+                            JTM:{' '}
+                            <strong className="text-[var(--accent-text)]">
+                              {formatAttendanceNumber(cond.allowsJtm ? log.jtm_hours : 0)} jam
+                            </strong>
+                          </p>
+                          {log.note && (
+                            <p className="text-[11px] text-[var(--ink-2)] break-words">
+                              “{log.note}”
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => handleDateChange(log.date)}
+                            title="Muat tanggal ini ke checklist"
+                            className="rounded-lg border border-[var(--line)] bg-white p-1.5 text-slate-600 hover:border-indigo-300 hover:text-indigo-700"
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setDeleteTarget(log)}
+                            title="Hapus entri kelas ini"
+                            className="rounded-lg border border-[var(--line)] bg-white p-1.5 text-slate-500 hover:border-rose-300 hover:text-rose-600"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
       <ConfirmModal
         isOpen={Boolean(deleteTarget)}
-        title="Hapus Catatan Kehadiran?"
+        title="Hapus Catatan Kelas?"
         message={
           deleteTarget
-            ? `Catatan tanggal ${formatDateIndo(deleteTarget.date)} (${
-                getAttendanceConditionMeta(deleteTarget.status).label
-              }) akan dihapus dan rekap kehadiran Admin diperbarui otomatis.`
+            ? `Catatan ${deleteTarget.class_name || 'Kelas'} tanggal ${formatDateIndo(
+                deleteTarget.date
+              )} (${getAttendanceConditionMeta(deleteTarget.status).label}) akan dihapus.`
             : ''
         }
         confirmLabel="Ya, Hapus"

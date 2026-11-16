@@ -35,6 +35,7 @@ import {
 } from '../utils/formatters';
 import {
   computeAttendanceBreakdownFromLogs,
+  computeClassBreakdownFromLogs,
   formatAttendanceNumber,
   formatDateIndo,
   getAttendanceConditionMeta,
@@ -1053,6 +1054,8 @@ export function AdminDashboard({
                   const teacherLogs = attendanceLogs.filter((l) => l.teacher_id === teacher.id);
                   const logBreakdown =
                     teacherLogs.length > 0 ? computeAttendanceBreakdownFromLogs(teacherLogs) : null;
+                  const classBreakdown =
+                    teacherLogs.length > 0 ? computeClassBreakdownFromLogs(teacherLogs) : [];
                   const isLogsExpanded = Boolean(expandedLogTeacherIds[teacher.id]);
 
                   return (
@@ -1154,9 +1157,27 @@ export function AdminDashboard({
                             <span>•</span>
                             <span className="font-semibold text-emerald-800">
                               Total: {formatAttendanceNumber(logBreakdown.present_days)} Hadir /{' '}
-                              {formatAttendanceNumber(logBreakdown.total_jtm)} JTM
+                              {formatAttendanceNumber(logBreakdown.total_jtm)} JTM (
+                              {classBreakdown.length} Kelas)
                             </span>
                           </div>
+
+                          {classBreakdown.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 pt-0.5">
+                              {classBreakdown.map((cb) => (
+                                <span
+                                  key={cb.class_name}
+                                  className="inline-flex items-center gap-1 rounded-lg border border-emerald-200 bg-white/90 px-2 py-0.5 text-[10.5px] font-semibold text-slate-700 tabular-nums"
+                                >
+                                  <span className="text-emerald-800">{cb.class_name}:</span>
+                                  <span>
+                                    {formatAttendanceNumber(cb.present_days)} hr •{' '}
+                                    {formatAttendanceNumber(cb.total_jtm)} JTM
+                                  </span>
+                                </span>
+                              ))}
+                            </div>
+                          )}
 
                           {isLogsExpanded && (
                             <div className="mt-2 max-h-44 overflow-y-auto space-y-1.5 border-t border-emerald-200/70 pt-2">
@@ -1171,6 +1192,9 @@ export function AdminDashboard({
                                       <span className="font-semibold text-slate-800">
                                         {formatDateIndo(lg.date)}
                                       </span>{' '}
+                                      <span className="inline-block rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                                        {lg.class_name || 'Kelas Umum'}
+                                      </span>{' '}
                                       <span className="text-slate-500">
                                         — {cond.label} ({cond.badgeText})
                                       </span>
@@ -1181,7 +1205,7 @@ export function AdminDashboard({
                                       )}
                                     </div>
                                     <span className="font-bold text-indigo-700 tabular-nums shrink-0">
-                                      +{formatAttendanceNumber(cond.presentWeight)} hr •{' '}
+                                      +{formatAttendanceNumber(cond.presentWeight)} •{' '}
                                       {formatAttendanceNumber(cond.allowsJtm ? lg.jtm_hours : 0)}{' '}
                                       JTM
                                     </span>

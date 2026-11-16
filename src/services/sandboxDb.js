@@ -181,7 +181,7 @@ async function buildInitialDatabase() {
       teacher_id: SEED_IDS.teacher1,
       month: 11,
       year: 2026,
-      present_days: 3.5,
+      present_days: 4.5,
       absent_days: 1,
       total_jtm: 16,
     },
@@ -210,23 +210,38 @@ async function buildInitialDatabase() {
       id: generateUuidV4(),
       teacher_id: SEED_IDS.teacher1,
       date: '2026-11-11',
+      class_name: 'Kelas VII A',
       month: 11,
       year: 2026,
       status: 'hadir',
-      jtm_hours: 6,
-      note: 'Mengajar Matematika Kelas X & XI',
+      jtm_hours: 3,
+      note: 'Matematika Aljabar',
       created_at: '2026-11-11T08:00:00.000Z',
       updated_at: '2026-11-11T08:00:00.000Z',
     },
     {
       id: generateUuidV4(),
       teacher_id: SEED_IDS.teacher1,
+      date: '2026-11-11',
+      class_name: 'Kelas VII B',
+      month: 11,
+      year: 2026,
+      status: 'hadir',
+      jtm_hours: 3,
+      note: 'Matematika Aljabar',
+      created_at: '2026-11-11T10:00:00.000Z',
+      updated_at: '2026-11-11T10:00:00.000Z',
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
       date: '2026-11-12',
+      class_name: 'Kelas VII A',
       month: 11,
       year: 2026,
       status: 'hadir',
       jtm_hours: 6,
-      note: 'Mengajar Matematika Kelas XII',
+      note: 'Latihan Soal & Pembahasan',
       created_at: '2026-11-12T08:00:00.000Z',
       updated_at: '2026-11-12T08:00:00.000Z',
     },
@@ -234,6 +249,7 @@ async function buildInitialDatabase() {
       id: generateUuidV4(),
       teacher_id: SEED_IDS.teacher1,
       date: '2026-11-13',
+      class_name: 'Kelas VII B',
       month: 11,
       year: 2026,
       status: 'tugas',
@@ -246,6 +262,7 @@ async function buildInitialDatabase() {
       id: generateUuidV4(),
       teacher_id: SEED_IDS.teacher1,
       date: '2026-11-14',
+      class_name: 'Kelas VII A',
       month: 11,
       year: 2026,
       status: 'izin',
@@ -258,11 +275,12 @@ async function buildInitialDatabase() {
       id: generateUuidV4(),
       teacher_id: SEED_IDS.teacher1,
       date: '2026-11-15',
+      class_name: 'Kelas VIII A',
       month: 11,
       year: 2026,
       status: 'hadir',
       jtm_hours: 4,
-      note: 'Mengajar Matematika & Pengayaan',
+      note: 'Pengayaan Geometri',
       created_at: '2026-11-15T08:00:00.000Z',
       updated_at: '2026-11-15T08:00:00.000Z',
     },
@@ -343,6 +361,13 @@ function upgradeLegacyDbToGmail(db) {
   if (!Array.isArray(db.Attendance_Logs)) {
     db.Attendance_Logs = [];
     modified = true;
+  } else {
+    db.Attendance_Logs.forEach((l) => {
+      if (!l.class_name) {
+        l.class_name = 'Kelas Umum';
+        modified = true;
+      }
+    });
   }
 
   const legacyMap = {
@@ -1204,6 +1229,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         };
       }
 
+      const className = (String(payload.class_name || '').trim() || 'Kelas Umum').slice(0, 80);
       const status = normalizeAttendanceStatus(payload.status);
       const jtmHours =
         status === 'sakit' || status === 'izin' ? 0 : roundAttendanceMetric(payload.jtm_hours || 0);
@@ -1212,13 +1238,17 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
       if (!Array.isArray(db.Attendance_Logs)) db.Attendance_Logs = [];
       const existingIdx = db.Attendance_Logs.findIndex(
-        (l) => l.teacher_id === targetTeacherId && l.date === rawDate
+        (l) =>
+          l.teacher_id === targetTeacherId &&
+          l.date === rawDate &&
+          String(l.class_name || 'Kelas Umum').toLowerCase() === className.toLowerCase()
       );
 
       let savedLog;
       if (existingIdx !== -1) {
         savedLog = {
           ...db.Attendance_Logs[existingIdx],
+          class_name: className,
           month: monthNum,
           year: yearNum,
           status,
@@ -1232,6 +1262,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           id: generateUuidV4(),
           teacher_id: targetTeacherId,
           date: rawDate,
+          class_name: className,
           month: monthNum,
           year: yearNum,
           status,
@@ -1276,6 +1307,110 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         ok: true,
         status: existingIdx !== -1 ? 200 : 201,
         data: { log: savedLog, attendanceSummary: attSummary },
+      };
+    }
+
+    case 'attendanceLogs.syncDateLogs': {
+      if (!['guru', 'admin'].includes(session.role)) return forbidden();
+      const targetTeacherId =
+        session.role === 'guru' ? getOwnedTeacher()?.id : String(payload.teacher_id || '');
+      if (!targetTeacherId) return forbidden();
+
+      const rawDate = String(payload.date || '').trim();
+      const dateMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!dateMatch) {
+        return { ok: false, status: 400, error: 'Format tanggal harus YYYY-MM-DD.' };
+      }
+      const yearNum = Number(dateMatch[1]);
+      const monthNum = Number(dateMatch[2]);
+      if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
+        return { ok: false, status: 400, error: 'Tanggal kehadiran tidak valid.' };
+      }
+
+      const locked = (db.Payrolls || []).some((p) => {
+        if (Number(p.year) !== yearNum || p.status === 'draft') return false;
+        const parsed = parsePeriodMonthKey(p.month);
+        return parsed.monthsInRange.includes(monthNum);
+      });
+      if (locked) {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            'Periode penggajian bulan ini sudah diajukan/disetujui sehingga catatan kehadiran terkunci.',
+        };
+      }
+
+      const rawEntries = Array.isArray(payload.entries) ? payload.entries : [];
+      const seen = new Set();
+      const nowIso = new Date().toISOString();
+      const nextDateLogs = [];
+
+      for (const entry of rawEntries) {
+        const className = String(entry?.class_name || '').trim().slice(0, 80);
+        if (!className) continue;
+        const key = className.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+
+        const status = normalizeAttendanceStatus(entry.status);
+        const jtmHours =
+          status === 'sakit' || status === 'izin' ? 0 : roundAttendanceMetric(entry.jtm_hours || 0);
+        const note = String(entry.note || '').trim().slice(0, 250);
+
+        nextDateLogs.push({
+          id: generateUuidV4(),
+          teacher_id: targetTeacherId,
+          date: rawDate,
+          class_name: className,
+          month: monthNum,
+          year: yearNum,
+          status,
+          jtm_hours: jtmHours,
+          note,
+          created_at: nowIso,
+          updated_at: nowIso,
+        });
+      }
+
+      if (!Array.isArray(db.Attendance_Logs)) db.Attendance_Logs = [];
+      db.Attendance_Logs = db.Attendance_Logs.filter(
+        (l) => !(l.teacher_id === targetTeacherId && l.date === rawDate)
+      ).concat(nextDateLogs);
+
+      const monthLogs = db.Attendance_Logs.filter(
+        (l) =>
+          l.teacher_id === targetTeacherId &&
+          Number(l.month) === monthNum &&
+          Number(l.year) === yearNum
+      );
+      const breakdown = computeAttendanceBreakdownFromLogs(monthLogs);
+      const attIdx = db.Attendances.findIndex(
+        (a) =>
+          a.teacher_id === targetTeacherId &&
+          normalizePeriodKey(a.month) === String(monthNum) &&
+          Number(a.year) === yearNum
+      );
+      const attSummary = {
+        id: attIdx !== -1 ? db.Attendances[attIdx].id : generateUuidV4(),
+        teacher_id: targetTeacherId,
+        month: monthNum,
+        year: yearNum,
+        present_days: breakdown.present_days,
+        absent_days: breakdown.absent_days,
+        total_jtm: breakdown.total_jtm,
+      };
+      if (attIdx !== -1) {
+        db.Attendances[attIdx] = attSummary;
+      } else {
+        db.Attendances.push(attSummary);
+      }
+
+      saveDb(db);
+      return {
+        ok: true,
+        status: 200,
+        data: { date: rawDate, logs: nextDateLogs, attendanceSummary: attSummary },
       };
     }
 

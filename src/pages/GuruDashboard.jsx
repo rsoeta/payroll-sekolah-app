@@ -104,8 +104,8 @@ export function GuruDashboard({
   const headerMeta =
     activeTab === 'attendance'
       ? {
-          title: 'Kehadiran & JTM Mandiri',
-          desc: 'Catat kehadiran harian (Hadir, Tugas, Sakit, Izin) dan JTM yang langsung tersinkron ke Bendahara.',
+          title: 'Kehadiran Per-Kelas & JTM',
+          desc: 'Centang kelas yang diampu (Hadir = 1, Tugas = 0,5, Sakit/Izin = 0) untuk disinkronkan otomatis ke Bendahara.',
         }
       : activeTab === 'profile'
       ? {
