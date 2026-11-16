@@ -75,6 +75,7 @@ jobs:
           port: ${{ secrets.SSH_PORT || 22 }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
+          passphrase: ${{ secrets.SSH_KEY_PASSPHRASE }}
           script: |
             set -e
             APP_DIR="$HOME/public_html/repositories/sipayroll.daaru-syifa-pakenjeng.studio-pasti.net"
