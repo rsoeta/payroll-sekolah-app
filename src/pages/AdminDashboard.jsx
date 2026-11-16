@@ -731,7 +731,7 @@ export function AdminDashboard({
               <button
                 type="button"
                 onClick={() => setEndMonth(startMonth)}
-                className={`nim-btn !min-h-[30px] !px-2.5 text-[11px] ${
+                className={`nim-btn nim-btn--sm text-[11px] ${
                   !periodInfo.isRange ? 'nim-btn--primary' : ''
                 }`}
               >
@@ -743,7 +743,7 @@ export function AdminDashboard({
                   setStartMonth(1);
                   setEndMonth(6);
                 }}
-                className={`nim-btn !min-h-[30px] !px-2.5 text-[11px] ${
+                className={`nim-btn nim-btn--sm text-[11px] ${
                   startMonth === 1 && endMonth === 6 ? 'nim-btn--primary' : ''
                 }`}
               >
@@ -755,7 +755,7 @@ export function AdminDashboard({
                   setStartMonth(7);
                   setEndMonth(12);
                 }}
-                className={`nim-btn !min-h-[30px] !px-2.5 text-[11px] ${
+                className={`nim-btn nim-btn--sm text-[11px] ${
                   startMonth === 7 && endMonth === 12 ? 'nim-btn--primary' : ''
                 }`}
               >
@@ -898,13 +898,13 @@ export function AdminDashboard({
                         </div>
 
                         <div
-                          className="flex flex-wrap items-center gap-2 pt-3"
+                          className="flex flex-wrap items-center justify-end gap-2 pt-3"
                           style={{ borderTop: '1px solid var(--line)' }}
                         >
                           <button
                             type="button"
                             onClick={() => handleInspectPayroll(pr)}
-                            className="nim-btn flex-1"
+                            className="nim-btn"
                           >
                             <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
                             <span>Rincian Slip</span>
@@ -921,7 +921,7 @@ export function AdminDashboard({
                                   `Ajukan penggajian ${getMonthName(pr.month)} ${pr.year} ke Kepala Sekolah?`
                                 )
                               }
-                              className="nim-btn nim-btn--warn flex-1"
+                              className="nim-btn nim-btn--warn"
                             >
                               <Send className="h-3.5 w-3.5" />
                               <span>Ajukan ke Kepsek</span>
@@ -940,7 +940,7 @@ export function AdminDashboard({
                                   'emerald'
                                 )
                               }
-                              className="nim-btn nim-btn--good flex-1"
+                              className="nim-btn nim-btn--good"
                             >
                               <CheckCircle2 className="h-3.5 w-3.5" />
                               <span>Tandai Dibayar</span>
@@ -1077,7 +1077,7 @@ export function AdminDashboard({
                                       <button
                                         type="button"
                                         onClick={() => downloadPayslipPdf(detail)}
-                                        className="nim-btn !min-h-[32px] !px-2.5 text-xs shrink-0"
+                                        className="nim-btn nim-btn--sm shrink-0"
                                         style={{
                                           background: 'var(--accent-soft)',
                                           color: 'var(--accent-text)',
@@ -1235,7 +1235,7 @@ export function AdminDashboard({
                         <button
                           type="button"
                           onClick={() => handleSaveSingleAttendance(teacher)}
-                          className="nim-btn !min-h-[32px] !px-2.5 text-xs"
+                          className="nim-btn nim-btn--sm shrink-0"
                           style={{
                             background: 'var(--accent-soft)',
                             color: 'var(--accent-text)',
@@ -1582,7 +1582,7 @@ export function AdminDashboard({
                               }
                               title="Buka Kalkulator JTM"
                               aria-label={`Buka Kalkulator JTM untuk ${teacher.name}`}
-                              className="nim-btn nim-btn--primary !px-2.5 shrink-0"
+                              className="nim-btn nim-btn--primary nim-btn--sm shrink-0"
                             >
                               <Calculator className="h-3.5 w-3.5" />
                               <span className="hidden sm:inline">Kalkulator</span>
@@ -1755,13 +1755,13 @@ export function AdminDashboard({
                       </div>
 
                       <div
-                        className="flex items-center gap-2 pt-3"
+                        className="flex items-center justify-end gap-2 pt-3"
                         style={{ borderTop: '1px solid var(--line)' }}
                       >
                         <button
                           type="button"
                           onClick={() => openEditTeacherModal(t)}
-                          className="nim-btn flex-1"
+                          className="nim-btn nim-btn--sm"
                         >
                           <Edit3 className="h-3.5 w-3.5 text-[var(--accent-text)]" />
                           <span>Edit Data &amp; Gaji</span>
@@ -1769,7 +1769,7 @@ export function AdminDashboard({
                         <button
                           type="button"
                           onClick={() => requestDeleteTeacher(t)}
-                          className="nim-btn nim-btn--danger !px-3"
+                          className="nim-btn nim-btn--danger nim-btn--sm"
                           aria-label={`Hapus ${t.name}`}
                         >
                           <Trash2 className="h-3.5 w-3.5" />

@@ -479,16 +479,18 @@ export function GuruDashboard({
                     </div>
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleDownloadPdf(slip)}
-                    className={`nim-btn w-full ${
-                      statusMeta.isEstimate ? '' : 'nim-btn--primary'
-                    }`}
-                  >
-                    <FileDown className="h-4 w-4" />
-                    <span>{statusMeta.btnLabel}</span>
-                  </button>
+                  <div className="flex justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadPdf(slip)}
+                      className={`nim-btn ${
+                        statusMeta.isEstimate ? '' : 'nim-btn--primary'
+                      }`}
+                    >
+                      <FileDown className="h-3.5 w-3.5" />
+                      <span>{statusMeta.btnLabel}</span>
+                    </button>
+                  </div>
                 </div>
               );
             })}

@@ -342,7 +342,7 @@ export function TeacherFormModal({
                     <button
                       type="button"
                       onClick={() => onAddCustomComponent('deduction', '', 50000)}
-                      className="nim-btn nim-btn--primary !min-h-[30px] !px-2.5 text-[11.5px]"
+                      className="nim-btn nim-btn--primary nim-btn--sm text-[11.5px]"
                     >
                       <Plus className="h-3.5 w-3.5" />
                       <span>Tambah Item</span>
@@ -358,7 +358,7 @@ export function TeacherFormModal({
                         onClick={() =>
                           onAddCustomComponent(preset.type, preset.label, preset.amount)
                         }
-                        className={`nim-btn !min-h-[26px] !px-2 text-[10.5px] ${
+                        className={`nim-btn nim-btn--sm text-[10.5px] ${
                           preset.type === 'allowance' ? 'nim-badge--good' : 'nim-badge--bad'
                         }`}
                       >
@@ -435,7 +435,7 @@ export function TeacherFormModal({
                             type="button"
                             onClick={() => onRemoveCustomComponent(item.id)}
                             aria-label="Hapus komponen custom"
-                            className="nim-btn nim-btn--danger !min-h-[32px] !px-2 shrink-0"
+                            className="nim-btn nim-btn--danger nim-btn--sm shrink-0"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
                           </button>
@@ -488,13 +488,13 @@ export function TeacherFormModal({
               <button
                 type="button"
                 onClick={onClose}
-                className="nim-btn !min-h-[34px] !px-4 text-xs"
+                className="nim-btn text-xs"
               >
                 Batal
               </button>
               <button
                 type="submit"
-                className="nim-btn nim-btn--primary !min-h-[34px] !px-5 text-xs"
+                className="nim-btn nim-btn--primary text-xs"
               >
                 Simpan Data
               </button>

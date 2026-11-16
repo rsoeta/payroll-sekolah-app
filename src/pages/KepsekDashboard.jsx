@@ -314,13 +314,13 @@ export function KepsekDashboard({
                   </div>
 
                   <div
-                    className="flex flex-wrap items-center gap-1.5 pt-3"
+                    className="flex flex-wrap items-center justify-end gap-1.5 pt-3"
                     style={{ borderTop: '1px solid var(--line)' }}
                   >
                     <button
                       type="button"
                       onClick={() => handleInspect(pr)}
-                      className="nim-btn flex-1"
+                      className="nim-btn"
                     >
                       <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
                       <span>Periksa Rincian</span>
@@ -340,7 +340,7 @@ export function KepsekDashboard({
                         <button
                           type="button"
                           onClick={() => triggerApproval(pr, 'approved')}
-                          className="nim-btn nim-btn--good flex-1"
+                          className="nim-btn nim-btn--good"
                         >
                           <CheckCircle2 className="h-3.5 w-3.5" />
                           <span>Setujui</span>

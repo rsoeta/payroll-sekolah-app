@@ -825,7 +825,7 @@ export function GuruSelfAttendanceSection({
             <button
               type="button"
               onClick={handleAddCustomClass}
-              className="nim-btn nim-btn--ghost !py-1.5 text-xs shrink-0"
+              className="nim-btn nim-btn--ghost nim-btn--sm shrink-0"
             >
               <Plus className="h-3.5 w-3.5" />
               <span>Tambah Kelas</span>

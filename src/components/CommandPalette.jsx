@@ -221,7 +221,7 @@ export function CommandPalette({
             type="button"
             onClick={onClose}
             aria-label="Tutup pencarian"
-            className="nim-ibtn !w-8 !h-8 !min-h-8"
+            className="nim-ibtn"
           >
             <X className="h-4 w-4" />
           </button>

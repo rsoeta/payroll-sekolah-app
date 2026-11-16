@@ -190,22 +190,22 @@ export function JtmCalculatorModal({
         </div>
 
         {/* Mode Switcher */}
-        <div className="fluid-container mt-3 gap-2">
+        <div className="flex flex-wrap items-center mt-3 gap-2">
           <button
             type="button"
             onClick={() => setMode('keypad')}
-            className={`fluid-item-xs nim-btn ${mode === 'keypad' ? 'nim-btn--primary' : ''}`}
+            className={`nim-btn nim-btn--sm flex-1 ${mode === 'keypad' ? 'nim-btn--primary' : ''}`}
           >
-            <Hash className="h-4 w-4" />
+            <Hash className="h-3.5 w-3.5" />
             <span>Kalkulator Angka</span>
           </button>
 
           <button
             type="button"
             onClick={() => setMode('weekly')}
-            className={`fluid-item-xs nim-btn ${mode === 'weekly' ? 'nim-btn--primary' : ''}`}
+            className={`nim-btn nim-btn--sm flex-1 ${mode === 'weekly' ? 'nim-btn--primary' : ''}`}
           >
-            <CalendarRange className="h-4 w-4" />
+            <CalendarRange className="h-3.5 w-3.5" />
             <span>Rumus Mingguan</span>
           </button>
         </div>
@@ -274,7 +274,7 @@ export function JtmCalculatorModal({
                   key={chip.label}
                   type="button"
                   onClick={() => appendToken(chip.token)}
-                  className="nim-btn flex-1 !min-h-[34px] !px-2 text-xs"
+                  className="nim-btn nim-btn--sm"
                   style={{
                     background: 'var(--accent-soft)',
                     color: 'var(--accent-text)',
@@ -291,7 +291,7 @@ export function JtmCalculatorModal({
                   key={n}
                   type="button"
                   onClick={() => appendToken(n)}
-                  className="nim-btn !min-h-[44px] text-base font-bold"
+                  className="nim-btn py-2 text-sm font-bold"
                 >
                   {n}
                 </button>
@@ -299,10 +299,10 @@ export function JtmCalculatorModal({
               <button
                 type="button"
                 onClick={handleClear}
-                className="nim-btn nim-btn--danger !min-h-[44px] text-xs font-bold"
+                className="nim-btn nim-btn--danger py-2 text-xs font-bold"
                 title="Bersihkan (Clear)"
               >
-                <RotateCcw className="h-4 w-4" /> C
+                <RotateCcw className="h-3.5 w-3.5" /> C
               </button>
 
               {['4', '5', '6'].map((n) => (
@@ -310,7 +310,7 @@ export function JtmCalculatorModal({
                   key={n}
                   type="button"
                   onClick={() => appendToken(n)}
-                  className="nim-btn !min-h-[44px] text-base font-bold"
+                  className="nim-btn py-2 text-sm font-bold"
                 >
                   {n}
                 </button>
@@ -318,7 +318,7 @@ export function JtmCalculatorModal({
               <button
                 type="button"
                 onClick={() => appendToken('+')}
-                className="nim-btn !min-h-[44px] text-lg font-bold"
+                className="nim-btn py-2 text-base font-bold"
                 style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}
               >
                 +
@@ -329,7 +329,7 @@ export function JtmCalculatorModal({
                   key={n}
                   type="button"
                   onClick={() => appendToken(n)}
-                  className="nim-btn !min-h-[44px] text-base font-bold"
+                  className="nim-btn py-2 text-sm font-bold"
                 >
                   {n}
                 </button>
@@ -337,7 +337,7 @@ export function JtmCalculatorModal({
               <button
                 type="button"
                 onClick={() => appendToken('-')}
-                className="nim-btn !min-h-[44px] text-lg font-bold"
+                className="nim-btn py-2 text-base font-bold"
                 style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}
               >
                 −
@@ -346,14 +346,14 @@ export function JtmCalculatorModal({
               <button
                 type="button"
                 onClick={() => appendToken('0')}
-                className="nim-btn !min-h-[44px] text-base font-bold"
+                className="nim-btn py-2 text-sm font-bold"
               >
                 0
               </button>
               <button
                 type="button"
                 onClick={() => appendToken('×')}
-                className="nim-btn !min-h-[44px] text-lg font-bold"
+                className="nim-btn py-2 text-base font-bold"
                 style={{ background: 'var(--accent-soft)', color: 'var(--accent-text)' }}
               >
                 ×
@@ -362,14 +362,14 @@ export function JtmCalculatorModal({
                 type="button"
                 onClick={handleBackspace}
                 aria-label="Hapus karakter terakhir"
-                className="nim-btn !min-h-[44px]"
+                className="nim-btn py-2 text-sm"
               >
-                <Delete className="h-5 w-5" />
+                <Delete className="h-4 w-4" />
               </button>
               <button
                 type="button"
                 onClick={handleEvaluateToNumber}
-                className="nim-btn nim-btn--warn !min-h-[44px] text-lg font-bold"
+                className="nim-btn nim-btn--warn py-2 text-base font-bold"
                 title="Hitung Hasil (=)"
               >
                 =
@@ -448,22 +448,22 @@ export function JtmCalculatorModal({
 
         {/* Footer Actions */}
         <div
-          className="fluid-container mt-5 pt-3 gap-2"
+          className="flex flex-wrap items-center justify-end mt-5 pt-3 gap-2"
           style={{ borderTop: '1px solid var(--line)' }}
         >
           <button
             type="button"
             onClick={onClose}
-            className="fluid-item-xs nim-btn"
+            className="nim-btn"
           >
             Batal
           </button>
           <button
             type="button"
             onClick={handleConfirm}
-            className="fluid-item-xs nim-btn nim-btn--primary"
+            className="nim-btn nim-btn--primary"
           >
-            <Check className="h-4 w-4" />
+            <Check className="h-3.5 w-3.5" />
             <span>Gunakan {formatRibuan(finalJtm)} Jam</span>
           </button>
         </div>

@@ -150,19 +150,12 @@
     margin: 0;
     padding: 0;
     font-family: var(--font-primary);
-    font-size: 13.5px;
-    line-height: 1.48;
+    font-size: 14px;
+    line-height: 1.45;
     background-color: var(--bg);
     color: var(--ink);
     -webkit-tap-highlight-color: transparent;
     transition: background-color 0.28s var(--ease), color 0.2s ease;
-  }
-
-  @media (min-width: 640px) {
-    html,
-    body {
-      font-size: 14px;
-    }
   }
 
   select option {
@@ -175,8 +168,6 @@
     color: #eef3ff;
   }
 
-  button,
-  [role='button'],
   input[type='text'],
   input[type='password'],
   input[type='number'],
@@ -189,6 +180,8 @@
 
   button,
   [role='button'] {
+    font-size: inherit;
+    line-height: 1.2;
     cursor: pointer;
     touch-action: manipulation;
     user-select: none;
@@ -438,13 +431,13 @@
 
   .nim-side__nav-btn {
     width: 100%;
-    min-height: 40px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 8px 11px;
-    border-radius: 12px;
+    gap: 0.65em;
+    padding: 0.55em 0.8em;
+    border-radius: 11px;
     font-size: var(--fs-md);
+    line-height: 1.25;
     font-weight: 600;
     color: var(--ink-2);
     position: relative;
@@ -715,19 +708,43 @@
 
   /* Buttons */
   .nim-btn {
-    min-height: 36px;
-    border-radius: 11px;
-    padding: 0 14px;
+    border-radius: 0.65em;
+    padding: 0.42em 0.9em;
     font-size: var(--fs-sm);
+    line-height: 1.2;
     font-weight: 600;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 7px;
+    gap: 0.45em;
     white-space: nowrap;
     background: var(--card-2);
     color: var(--ink);
     box-shadow: inset 0 0 0 1px var(--line-2);
+  }
+
+  .nim-btn--sm {
+    padding: 0.32em 0.72em;
+    font-size: var(--fs-xs);
+    border-radius: 0.55em;
+  }
+
+  .nim-btn--ghost {
+    background: transparent;
+    color: var(--ink-2);
+    box-shadow: none;
+  }
+
+  .nim-btn--ghost:hover:not(:disabled) {
+    background: var(--card-2);
+    color: var(--ink);
+  }
+
+  .nim-btn svg,
+  .nim-ibtn svg {
+    width: 1.05em;
+    height: 1.05em;
+    flex-shrink: 0;
   }
 
   .nim-btn:hover:not(:disabled) {
@@ -781,10 +798,12 @@
   }
 
   .nim-ibtn {
-    width: 38px;
-    height: 38px;
-    min-height: 38px;
-    border-radius: 12px;
+    width: 2.2em;
+    height: 2.2em;
+    padding: 0;
+    font-size: var(--fs-md);
+    line-height: 1;
+    border-radius: 0.65em;
     display: grid;
     place-items: center;
     background: var(--card-2);

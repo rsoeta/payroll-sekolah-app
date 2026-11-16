@@ -437,7 +437,7 @@ export function TeacherImportModal({
                     setFileName('');
                     if (fileInputRef.current) fileInputRef.current.value = '';
                   }}
-                  className="nim-btn nim-btn--danger !min-h-[30px] !px-2.5 text-xs"
+                  className="nim-btn nim-btn--danger nim-btn--sm"
                 >
                   Bersihkan Pratinjau
                 </button>
@@ -539,14 +539,14 @@ export function TeacherImportModal({
 
         {/* Footer Actions */}
         <div
-          className="fluid-container mt-4 pt-3 shrink-0 gap-2"
+          className="flex flex-wrap items-center justify-end mt-4 pt-3 shrink-0 gap-2"
           style={{ borderTop: '1px solid var(--line)' }}
         >
           <button
             type="button"
             onClick={onClose}
             disabled={importing}
-            className="fluid-item-xs nim-btn"
+            className="nim-btn"
           >
             Batal
           </button>
@@ -555,7 +555,7 @@ export function TeacherImportModal({
             type="button"
             onClick={handleExecuteImport}
             disabled={importing || validRows.length === 0}
-            className="fluid-item-xs nim-btn nim-btn--good"
+            className="nim-btn nim-btn--good"
           >
             {importing ? (
               <>

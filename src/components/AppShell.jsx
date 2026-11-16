@@ -285,9 +285,8 @@ export function AppShell({
 
               {/* Brand (always shown on guest view, and on mobile <= 760px when logged in) */}
               <div
-                className={`${
-                  user ? 'nim-top__brand hidden max-[760px]:flex' : 'flex'
-                } items-center gap-2.5 min-w-0`}
+                className={`${user ? 'nim-top__brand hidden max-[760px]:flex' : 'flex'
+                  } items-center gap-2.5 min-w-0`}
               >
                 <img
                   src={schoolProfile.logo_data_url || '/logo.png'}
@@ -360,7 +359,7 @@ export function AppShell({
                     type="button"
                     onClick={handleInstallPwaClick}
                     title="Install Aplikasi SIPAYROLL"
-                    className="nim-btn !min-h-[36px] !px-2.5 text-xs"
+                    className="nim-btn nim-btn--sm"
                     style={{
                       background: 'var(--good-soft)',
                       color: 'var(--good-text)',
@@ -403,7 +402,7 @@ export function AppShell({
                     type="button"
                     onClick={onLogout}
                     aria-label="Keluar sesi"
-                    className="nim-btn nim-btn--danger !min-h-[36px] !px-2.5 sm:!px-3 text-xs"
+                    className="nim-btn nim-btn--danger nim-btn--sm"
                   >
                     <LogOut className="h-3.5 w-3.5" />
                     <span className="hidden sm:inline">Keluar</span>

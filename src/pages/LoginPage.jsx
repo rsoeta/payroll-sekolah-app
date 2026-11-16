@@ -481,7 +481,7 @@ export function LoginPage({ onLoginSuccess }) {
                     type="button"
                     disabled={loading}
                     onClick={handleBackToEmail}
-                    className="nim-btn !min-h-[30px] !px-2.5 text-[11px]"
+                    className="nim-btn nim-btn--sm text-[11px]"
                   >
                     <ArrowLeft className="h-3 w-3" />
                     <span>Ganti Gmail</span>
@@ -506,7 +506,7 @@ export function LoginPage({ onLoginSuccess }) {
                     <button
                       type="button"
                       onClick={() => setOtpInput(simulationOtpHint)}
-                      className="nim-btn !min-h-[26px] !px-2 text-[10.5px]"
+                      className="nim-btn nim-btn--sm text-[10.5px]"
                     >
                       Isi Otomatis
                     </button>
@@ -547,7 +547,7 @@ export function LoginPage({ onLoginSuccess }) {
                     type="button"
                     disabled={loading || resendCooldown > 0}
                     onClick={() => requestGmailOtp(activeEmail)}
-                    className="nim-btn text-[11px]"
+                    className="nim-btn nim-btn--sm text-[11px]"
                   >
                     {resendCooldown > 0
                       ? `Kirim Ulang (${resendCooldown}d)`
