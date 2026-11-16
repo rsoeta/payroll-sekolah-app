@@ -17,6 +17,9 @@ import {
   Eye,
   Building2,
   Mail,
+  ChevronDown,
+  ChevronUp,
+  ClipboardList,
 } from 'lucide-react';
 import api from '../services/gasApi';
 import notify from '../utils/notify';
@@ -30,6 +33,12 @@ import {
   buildPeriodMonthKey,
   parsePeriodMonthKey,
 } from '../utils/formatters';
+import {
+  computeAttendanceBreakdownFromLogs,
+  formatAttendanceNumber,
+  formatDateIndo,
+  getAttendanceConditionMeta,
+} from '../utils/attendanceHelpers';
 import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
 import ConfirmModal from '../components/ConfirmModal';
 import JtmCalculatorModal from '../components/JtmCalculatorModal';
@@ -99,6 +108,8 @@ export function AdminDashboard({
   const [teachers, setTeachers] = useState([]);
   const [payrolls, setPayrolls] = useState([]);
   const [attendances, setAttendances] = useState([]);
+  const [attendanceLogs, setAttendanceLogs] = useState([]);
+  const [expandedLogTeacherIds, setExpandedLogTeacherIds] = useState({});
   const [startMonth, setStartMonth] = useState(11);
   const [endMonth, setEndMonth] = useState(11);
   const [selectedYear, setSelectedYear] = useState(2026);
@@ -133,23 +144,43 @@ export function AdminDashboard({
   const loadAllData = useCallback(async () => {
     setLoading(true);
     try {
-      const [teacherList, payrollList, attList] = await Promise.all([
+      const [teacherList, payrollList, attList, logList] = await Promise.all([
         api.get('teachers.list'),
         api.get('payrolls.list'),
         api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
+        api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }).catch(() => []),
       ]);
       setTeachers(teacherList || []);
       setPayrolls(payrollList || []);
       setAttendances(attList || []);
+      setAttendanceLogs(Array.isArray(logList) ? logList : []);
 
       const nextAttMap = {};
       (teacherList || []).forEach((t) => {
         const found = (attList || []).find((a) => a.teacher_id === t.id);
-        nextAttMap[t.id] = {
-          present_days: found ? Number(found.present_days) : 20,
-          absent_days: found ? Number(found.absent_days) : 0,
-          total_jtm: found ? Number(found.total_jtm) : 24,
-        };
+        const teacherLogs = (Array.isArray(logList) ? logList : []).filter(
+          (l) => l.teacher_id === t.id
+        );
+        if (found) {
+          nextAttMap[t.id] = {
+            present_days: Number(found.present_days),
+            absent_days: Number(found.absent_days),
+            total_jtm: Number(found.total_jtm),
+          };
+        } else if (teacherLogs.length > 0) {
+          const calc = computeAttendanceBreakdownFromLogs(teacherLogs);
+          nextAttMap[t.id] = {
+            present_days: calc.present_days,
+            absent_days: calc.absent_days,
+            total_jtm: calc.total_jtm,
+          };
+        } else {
+          nextAttMap[t.id] = {
+            present_days: 20,
+            absent_days: 0,
+            total_jtm: 24,
+          };
+        }
       });
       setAttEdits(nextAttMap);
     } catch (err) {
@@ -1019,6 +1050,10 @@ export function AdminDashboard({
                   };
                   const hourlyRate = Number(teacher.salary_component?.hourly_rate || 0);
                   const estimatedHonor = row.total_jtm * hourlyRate;
+                  const teacherLogs = attendanceLogs.filter((l) => l.teacher_id === teacher.id);
+                  const logBreakdown =
+                    teacherLogs.length > 0 ? computeAttendanceBreakdownFromLogs(teacherLogs) : null;
+                  const isLogsExpanded = Boolean(expandedLogTeacherIds[teacher.id]);
 
                   return (
                     <div
@@ -1049,6 +1084,115 @@ export function AdminDashboard({
                         </button>
                       </div>
 
+                      {logBreakdown && (
+                        <div
+                          className="rounded-xl border border-emerald-200/80 bg-emerald-50/50 p-3 space-y-2 text-xs"
+                        >
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5 font-semibold text-emerald-800">
+                              <ClipboardList className="h-3.5 w-3.5 shrink-0" />
+                              <span>
+                                Catatan Mandiri Guru ({logBreakdown.log_count} hari tercatat)
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setAttEdits((prev) => ({
+                                    ...prev,
+                                    [teacher.id]: {
+                                      present_days: logBreakdown.present_days,
+                                      absent_days: logBreakdown.absent_days,
+                                      total_jtm: logBreakdown.total_jtm,
+                                    },
+                                  }));
+                                  notify.info(
+                                    `Nilai rekap ${teacher.name} disinkronkan dari log mandiri guru.`
+                                  );
+                                }}
+                                className="rounded-lg border border-emerald-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50"
+                              >
+                                Terapkan Log
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedLogTeacherIds((prev) => ({
+                                    ...prev,
+                                    [teacher.id]: !prev[teacher.id],
+                                  }))
+                                }
+                                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                              >
+                                <span>{isLogsExpanded ? 'Tutup Log' : 'Lihat Log'}</span>
+                                {isLogsExpanded ? (
+                                  <ChevronUp className="h-3 w-3" />
+                                ) : (
+                                  <ChevronDown className="h-3 w-3" />
+                                )}
+                              </button>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-700 tabular-nums">
+                            <span>
+                              Hadir: <strong>{logBreakdown.hadir_count}</strong> (×1)
+                            </span>
+                            <span>•</span>
+                            <span>
+                              Tugas: <strong>{logBreakdown.tugas_count}</strong> (×0,5)
+                            </span>
+                            <span>•</span>
+                            <span>
+                              Sakit: <strong>{logBreakdown.sakit_count}</strong> (0)
+                            </span>
+                            <span>•</span>
+                            <span>
+                              Izin: <strong>{logBreakdown.izin_count}</strong> (0)
+                            </span>
+                            <span>•</span>
+                            <span className="font-semibold text-emerald-800">
+                              Total: {formatAttendanceNumber(logBreakdown.present_days)} Hadir /{' '}
+                              {formatAttendanceNumber(logBreakdown.total_jtm)} JTM
+                            </span>
+                          </div>
+
+                          {isLogsExpanded && (
+                            <div className="mt-2 max-h-44 overflow-y-auto space-y-1.5 border-t border-emerald-200/70 pt-2">
+                              {teacherLogs.map((lg) => {
+                                const cond = getAttendanceConditionMeta(lg.status);
+                                return (
+                                  <div
+                                    key={lg.id}
+                                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/90 px-2.5 py-1.5 text-[11px] border border-slate-100"
+                                  >
+                                    <div className="min-w-0">
+                                      <span className="font-semibold text-slate-800">
+                                        {formatDateIndo(lg.date)}
+                                      </span>{' '}
+                                      <span className="text-slate-500">
+                                        — {cond.label} ({cond.badgeText})
+                                      </span>
+                                      {lg.note && (
+                                        <span className="block text-[10.5px] text-slate-500 truncate">
+                                          {lg.note}
+                                        </span>
+                                      )}
+                                    </div>
+                                    <span className="font-bold text-indigo-700 tabular-nums shrink-0">
+                                      +{formatAttendanceNumber(cond.presentWeight)} hr •{' '}
+                                      {formatAttendanceNumber(cond.allowsJtm ? lg.jtm_hours : 0)}{' '}
+                                      JTM
+                                    </span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <div className="fluid-container gap-2.5 sm:gap-3">
                         <div className="fluid-item-xs">
                           <label className="block text-xs font-semibold text-[var(--ink-2)]">
@@ -1057,6 +1201,7 @@ export function AdminDashboard({
                           <input
                             type="number"
                             min="0"
+                            step="0.5"
                             max={31 * periodInfo.monthCount}
                             value={row.present_days}
                             onChange={(e) =>
@@ -1068,11 +1213,12 @@ export function AdminDashboard({
 
                         <div className="fluid-item-xs">
                           <label className="block text-xs font-semibold text-[var(--ink-2)]">
-                            Hari Alpa
+                            Tidak Hadir (Sakit/Izin/Alpa)
                           </label>
                           <input
                             type="number"
                             min="0"
+                            step="1"
                             max={31 * periodInfo.monthCount}
                             value={row.absent_days}
                             onChange={(e) =>
@@ -1090,6 +1236,7 @@ export function AdminDashboard({
                             <input
                               type="number"
                               min="0"
+                              step="0.5"
                               max={200 * periodInfo.monthCount}
                               value={row.total_jtm}
                               onChange={(e) =>

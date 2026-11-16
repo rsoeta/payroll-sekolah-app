@@ -8,6 +8,11 @@
  */
 
 import { normalizePeriodKey, parsePeriodMonthKey } from '../utils/formatters';
+import {
+  computeAttendanceBreakdownFromLogs,
+  normalizeAttendanceStatus,
+  roundAttendanceMetric,
+} from '../utils/attendanceHelpers';
 
 const STORAGE_KEY = 'sipayroll_sheets_sandbox_v1';
 
@@ -176,9 +181,9 @@ async function buildInitialDatabase() {
       teacher_id: SEED_IDS.teacher1,
       month: 11,
       year: 2026,
-      present_days: 21,
-      absent_days: 0,
-      total_jtm: 26,
+      present_days: 3.5,
+      absent_days: 1,
+      total_jtm: 16,
     },
     {
       id: generateUuidV4(),
@@ -197,6 +202,69 @@ async function buildInitialDatabase() {
       present_days: 19,
       absent_days: 1,
       total_jtm: 18,
+    },
+  ];
+
+  const Attendance_Logs = [
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      date: '2026-11-11',
+      month: 11,
+      year: 2026,
+      status: 'hadir',
+      jtm_hours: 6,
+      note: 'Mengajar Matematika Kelas X & XI',
+      created_at: '2026-11-11T08:00:00.000Z',
+      updated_at: '2026-11-11T08:00:00.000Z',
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      date: '2026-11-12',
+      month: 11,
+      year: 2026,
+      status: 'hadir',
+      jtm_hours: 6,
+      note: 'Mengajar Matematika Kelas XII',
+      created_at: '2026-11-12T08:00:00.000Z',
+      updated_at: '2026-11-12T08:00:00.000Z',
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      date: '2026-11-13',
+      month: 11,
+      year: 2026,
+      status: 'tugas',
+      jtm_hours: 0,
+      note: 'Tugas Rapat MGMP Kabupaten',
+      created_at: '2026-11-13T09:30:00.000Z',
+      updated_at: '2026-11-13T09:30:00.000Z',
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      date: '2026-11-14',
+      month: 11,
+      year: 2026,
+      status: 'izin',
+      jtm_hours: 0,
+      note: 'Izin keperluan keluarga',
+      created_at: '2026-11-14T07:15:00.000Z',
+      updated_at: '2026-11-14T07:15:00.000Z',
+    },
+    {
+      id: generateUuidV4(),
+      teacher_id: SEED_IDS.teacher1,
+      date: '2026-11-15',
+      month: 11,
+      year: 2026,
+      status: 'hadir',
+      jtm_hours: 4,
+      note: 'Mengajar Matematika & Pengayaan',
+      created_at: '2026-11-15T08:00:00.000Z',
+      updated_at: '2026-11-15T08:00:00.000Z',
     },
   ];
 
@@ -251,7 +319,7 @@ async function buildInitialDatabase() {
       month: 11,
       year: 2026,
       total_budget: novDetails.reduce((acc, d) => acc + d.net_salary, 0),
-      status: 'submitted',
+      status: 'draft',
     },
   ];
 
@@ -262,6 +330,7 @@ async function buildInitialDatabase() {
     Teachers,
     Salary_Components,
     Attendances,
+    Attendance_Logs,
     Payrolls,
     Payroll_Details,
   };
@@ -270,6 +339,11 @@ async function buildInitialDatabase() {
 function upgradeLegacyDbToGmail(db) {
   if (!db || !Array.isArray(db.Users_Auth)) return db;
   let modified = false;
+
+  if (!Array.isArray(db.Attendance_Logs)) {
+    db.Attendance_Logs = [];
+    modified = true;
+  }
 
   const legacyMap = {
     admin: 'admin.sekolah@gmail.com',
@@ -1063,9 +1137,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         teacher_id: payload.teacher_id,
         month: storedMonth,
         year: targetYear,
-        present_days: Number(payload.present_days || 0),
-        absent_days: Number(payload.absent_days || 0),
-        total_jtm: Number(payload.total_jtm || 0),
+        present_days: roundAttendanceMetric(payload.present_days || 0),
+        absent_days: roundAttendanceMetric(payload.absent_days || 0),
+        total_jtm: roundAttendanceMetric(payload.total_jtm || 0),
       };
       if (existingIdx !== -1) {
         db.Attendances[existingIdx] = record;
@@ -1074,6 +1148,199 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       }
       saveDb(db);
       return { ok: true, status: 200, data: record };
+    }
+
+    case 'attendanceLogs.list': {
+      let logs = [...(db.Attendance_Logs || [])];
+      if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        if (!own) return forbidden();
+        logs = logs.filter((l) => l.teacher_id === own.id);
+      } else if (payload.teacher_id) {
+        logs = logs.filter((l) => l.teacher_id === payload.teacher_id);
+      }
+
+      if (payload.year) {
+        logs = logs.filter((l) => Number(l.year) === Number(payload.year));
+      }
+      if (payload.month) {
+        const parsed = parsePeriodMonthKey(payload.month);
+        const rangeSet = new Set(parsed.monthsInRange);
+        logs = logs.filter((l) => rangeSet.has(Number(l.month)));
+      }
+
+      logs.sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+      return { ok: true, status: 200, data: logs };
+    }
+
+    case 'attendanceLogs.upsertMyLog': {
+      if (!['guru', 'admin'].includes(session.role)) return forbidden();
+      const targetTeacherId =
+        session.role === 'guru' ? getOwnedTeacher()?.id : String(payload.teacher_id || '');
+      if (!targetTeacherId) return forbidden();
+
+      const rawDate = String(payload.date || '').trim();
+      const dateMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!dateMatch) {
+        return { ok: false, status: 400, error: 'Format tanggal harus YYYY-MM-DD.' };
+      }
+      const yearNum = Number(dateMatch[1]);
+      const monthNum = Number(dateMatch[2]);
+      if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
+        return { ok: false, status: 400, error: 'Tanggal kehadiran tidak valid.' };
+      }
+
+      const locked = (db.Payrolls || []).some((p) => {
+        if (Number(p.year) !== yearNum || p.status === 'draft') return false;
+        const parsed = parsePeriodMonthKey(p.month);
+        return parsed.monthsInRange.includes(monthNum);
+      });
+      if (locked) {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            'Periode penggajian bulan ini sudah diajukan/disetujui sehingga catatan kehadiran terkunci.',
+        };
+      }
+
+      const status = normalizeAttendanceStatus(payload.status);
+      const jtmHours =
+        status === 'sakit' || status === 'izin' ? 0 : roundAttendanceMetric(payload.jtm_hours || 0);
+      const note = String(payload.note || '').trim().slice(0, 250);
+      const nowIso = new Date().toISOString();
+
+      if (!Array.isArray(db.Attendance_Logs)) db.Attendance_Logs = [];
+      const existingIdx = db.Attendance_Logs.findIndex(
+        (l) => l.teacher_id === targetTeacherId && l.date === rawDate
+      );
+
+      let savedLog;
+      if (existingIdx !== -1) {
+        savedLog = {
+          ...db.Attendance_Logs[existingIdx],
+          month: monthNum,
+          year: yearNum,
+          status,
+          jtm_hours: jtmHours,
+          note,
+          updated_at: nowIso,
+        };
+        db.Attendance_Logs[existingIdx] = savedLog;
+      } else {
+        savedLog = {
+          id: generateUuidV4(),
+          teacher_id: targetTeacherId,
+          date: rawDate,
+          month: monthNum,
+          year: yearNum,
+          status,
+          jtm_hours: jtmHours,
+          note,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+        db.Attendance_Logs.push(savedLog);
+      }
+
+      const monthLogs = db.Attendance_Logs.filter(
+        (l) =>
+          l.teacher_id === targetTeacherId &&
+          Number(l.month) === monthNum &&
+          Number(l.year) === yearNum
+      );
+      const breakdown = computeAttendanceBreakdownFromLogs(monthLogs);
+      const attIdx = db.Attendances.findIndex(
+        (a) =>
+          a.teacher_id === targetTeacherId &&
+          normalizePeriodKey(a.month) === String(monthNum) &&
+          Number(a.year) === yearNum
+      );
+      const attSummary = {
+        id: attIdx !== -1 ? db.Attendances[attIdx].id : generateUuidV4(),
+        teacher_id: targetTeacherId,
+        month: monthNum,
+        year: yearNum,
+        present_days: breakdown.present_days,
+        absent_days: breakdown.absent_days,
+        total_jtm: breakdown.total_jtm,
+      };
+      if (attIdx !== -1) {
+        db.Attendances[attIdx] = attSummary;
+      } else {
+        db.Attendances.push(attSummary);
+      }
+
+      saveDb(db);
+      return {
+        ok: true,
+        status: existingIdx !== -1 ? 200 : 201,
+        data: { log: savedLog, attendanceSummary: attSummary },
+      };
+    }
+
+    case 'attendanceLogs.deleteMyLog': {
+      if (!['guru', 'admin'].includes(session.role)) return forbidden();
+      const logs = db.Attendance_Logs || [];
+      const targetIdx = logs.findIndex((l) => l.id === payload.id);
+      if (targetIdx === -1) return { ok: false, status: 404, error: 'Catatan tidak ditemukan.' };
+
+      const target = logs[targetIdx];
+      if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        if (!own || target.teacher_id !== own.id) return forbidden();
+      }
+
+      const locked = (db.Payrolls || []).some((p) => {
+        if (Number(p.year) !== Number(target.year) || p.status === 'draft') return false;
+        const parsed = parsePeriodMonthKey(p.month);
+        return parsed.monthsInRange.includes(Number(target.month));
+      });
+      if (locked) {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            'Periode penggajian bulan ini sudah diajukan/disetujui sehingga catatan tidak dapat dihapus.',
+        };
+      }
+
+      db.Attendance_Logs.splice(targetIdx, 1);
+
+      const monthLogs = db.Attendance_Logs.filter(
+        (l) =>
+          l.teacher_id === target.teacher_id &&
+          Number(l.month) === Number(target.month) &&
+          Number(l.year) === Number(target.year)
+      );
+      const breakdown = computeAttendanceBreakdownFromLogs(monthLogs);
+      const attIdx = db.Attendances.findIndex(
+        (a) =>
+          a.teacher_id === target.teacher_id &&
+          normalizePeriodKey(a.month) === String(target.month) &&
+          Number(a.year) === Number(target.year)
+      );
+      const attSummary = {
+        id: attIdx !== -1 ? db.Attendances[attIdx].id : generateUuidV4(),
+        teacher_id: target.teacher_id,
+        month: Number(target.month),
+        year: Number(target.year),
+        present_days: breakdown.present_days,
+        absent_days: breakdown.absent_days,
+        total_jtm: breakdown.total_jtm,
+      };
+      if (attIdx !== -1) {
+        db.Attendances[attIdx] = attSummary;
+      } else {
+        db.Attendances.push(attSummary);
+      }
+
+      saveDb(db);
+      return {
+        ok: true,
+        status: 200,
+        data: { deletedId: target.id, attendanceSummary: attSummary },
+      };
     }
 
     case 'payrolls.list': {

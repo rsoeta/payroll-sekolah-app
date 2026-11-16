@@ -36,6 +36,7 @@ const SHEETS = Object.freeze({
   TEACHERS: 'Teachers',
   SALARY_COMPONENTS: 'Salary_Components',
   ATTENDANCES: 'Attendances',
+  ATTENDANCE_LOGS: 'Attendance_Logs',
   PAYROLLS: 'Payrolls',
   PAYROLL_DETAILS: 'Payroll_Details',
 });
@@ -53,6 +54,18 @@ const SCHEMA_HEADERS = Object.freeze({
     'custom_components_json',
   ],
   [SHEETS.ATTENDANCES]: ['id', 'teacher_id', 'month', 'year', 'present_days', 'absent_days', 'total_jtm'],
+  [SHEETS.ATTENDANCE_LOGS]: [
+    'id',
+    'teacher_id',
+    'date',
+    'month',
+    'year',
+    'status',
+    'jtm_hours',
+    'note',
+    'created_at',
+    'updated_at',
+  ],
   [SHEETS.PAYROLLS]: ['id', 'month', 'year', 'total_budget', 'status'],
   [SHEETS.PAYROLL_DETAILS]: ['id', 'payroll_id', 'teacher_id', 'net_salary', 'details_json'],
 });
@@ -222,6 +235,22 @@ function routeAuthenticatedRequest(method, action, payload, session) {
       case 'attendances.upsert':
         if (!['POST', 'PUT'].includes(method) || session.role !== ROLES.ADMIN) return forbiddenResponse();
         return handleUpsertAttendance(payload);
+
+      case 'attendanceLogs.list':
+        if (method !== 'GET') return forbiddenResponse();
+        return handleListAttendanceLogs(session, payload);
+
+      case 'attendanceLogs.upsertMyLog':
+        if (!['POST', 'PUT'].includes(method) || ![ROLES.GURU, ROLES.ADMIN].includes(session.role)) {
+          return forbiddenResponse();
+        }
+        return handleUpsertMyAttendanceLog(session, payload);
+
+      case 'attendanceLogs.deleteMyLog':
+        if (method !== 'DELETE' || ![ROLES.GURU, ROLES.ADMIN].includes(session.role)) {
+          return forbiddenResponse();
+        }
+        return handleDeleteMyAttendanceLog(session, payload);
 
       case 'payrolls.list':
         if (method !== 'GET') return forbiddenResponse();
@@ -1237,15 +1266,96 @@ function normalizePeriodKey(monthValue) {
   return '';
 }
 
+function parsePeriodMonthKeyGas(monthValue) {
+  var norm = normalizePeriodKey(monthValue);
+  var rangeMatch = norm.match(/^(\d{1,2})-(\d{1,2})$/);
+  if (rangeMatch) {
+    var startMonth = Number(rangeMatch[1]);
+    var endMonth = Number(rangeMatch[2]);
+    var monthCount =
+      endMonth >= startMonth ? endMonth - startMonth + 1 : 12 - startMonth + 1 + endMonth;
+    var monthsInRange = [];
+    var cur = startMonth;
+    for (var i = 0; i < monthCount; i++) {
+      monthsInRange.push(cur);
+      cur = cur === 12 ? 1 : cur + 1;
+    }
+    return {
+      key: norm,
+      startMonth: startMonth,
+      endMonth: endMonth,
+      isRange: true,
+      monthCount: monthCount,
+      monthsInRange: monthsInRange,
+    };
+  }
+  var single = Math.min(12, Math.max(1, Number(norm) || 1));
+  return {
+    key: String(single),
+    startMonth: single,
+    endMonth: single,
+    isRange: false,
+    monthCount: 1,
+    monthsInRange: [single],
+  };
+}
+
 function handleListAttendances(session, payload) {
   const monthKey = payload.month ? normalizePeriodKey(payload.month) : '';
   const year = payload.year ? Number(payload.year) : null;
   let records = readSheetRecords(SHEETS.ATTENDANCES);
 
   if (monthKey && year) {
-    records = records.filter(function (r) {
+    const parsedPeriod = parsePeriodMonthKeyGas(monthKey);
+    const directMatches = records.filter(function (r) {
       return normalizePeriodKey(r.month) === monthKey && Number(r.year) === year;
     });
+
+    if (parsedPeriod.isRange) {
+      const directTeacherIds = {};
+      directMatches.forEach(function (a) {
+        directTeacherIds[String(a.teacher_id)] = true;
+      });
+      const rangeSet = {};
+      parsedPeriod.monthsInRange.forEach(function (m) {
+        rangeSet[String(m)] = true;
+      });
+      const teachers = readSheetRecords(SHEETS.TEACHERS);
+      const aggregatedRows = [];
+
+      teachers.forEach(function (t) {
+        if (directTeacherIds[String(t.id)]) return;
+        const subRows = records.filter(function (a) {
+          return (
+            String(a.teacher_id) === String(t.id) &&
+            Number(a.year) === year &&
+            Boolean(rangeSet[normalizePeriodKey(a.month)])
+          );
+        });
+        if (subRows.length > 0) {
+          let sumPresent = 0;
+          let sumAbsent = 0;
+          let sumJtm = 0;
+          subRows.forEach(function (r) {
+            sumPresent += Number(r.present_days || 0);
+            sumAbsent += Number(r.absent_days || 0);
+            sumJtm += Number(r.total_jtm || 0);
+          });
+          aggregatedRows.push({
+            id: 'agg_' + t.id + '_' + monthKey + '_' + year,
+            teacher_id: t.id,
+            month: monthKey,
+            year: year,
+            present_days: sanitizeDecimalNonNegative(sumPresent, 0),
+            absent_days: sanitizeDecimalNonNegative(sumAbsent, 0),
+            total_jtm: sanitizeDecimalNonNegative(sumJtm, 0),
+          });
+        }
+      });
+      records = directMatches.concat(aggregatedRows);
+    } else {
+      records = directMatches;
+    }
   }
 
   if (session.role === ROLES.GURU) {
@@ -1259,54 +1369,290 @@ function handleListAttendances(session, payload) {
   return buildJsonResponse(200, { ok: true, data: records });
 }
 
-function handleUpsertAttendance(payload) {
-  const teacherId = sanitizeString(payload.teacher_id);
-  const monthKey = normalizePeriodKey(payload.month);
+function upsertAttendanceSummaryRecord(teacherId, monthNumOrKey, year, presentDays, absentDays, totalJtm) {
+  const monthKey = normalizePeriodKey(monthNumOrKey);
   const storedMonth = /^\d+$/.test(monthKey) ? Number(monthKey) : monthKey;
-  const year = Number(payload.year);
-  const presentDays = sanitizeNonNegativeNumber(payload.present_days, 0);
-  const absentDays = sanitizeNonNegativeNumber(payload.absent_days, 0);
-  const totalJtm = sanitizeNonNegativeNumber(payload.total_jtm, 0);
-
-  if (!teacherId || !monthKey || !year || year < 2020 || year > 2100) {
-    return buildJsonResponse(400, { ok: false, error: 'Parameter kehadiran (guru, periode bulan, tahun) tidak valid.' });
-  }
+  const cleanPresent = sanitizeDecimalNonNegative(presentDays, 0);
+  const cleanAbsent = sanitizeDecimalNonNegative(absentDays, 0);
+  const cleanJtm = sanitizeDecimalNonNegative(totalJtm, 0);
 
   const attendances = readSheetRecords(SHEETS.ATTENDANCES);
   const existing = attendances.find(function (a) {
     return (
-      String(a.teacher_id) === teacherId &&
+      String(a.teacher_id) === String(teacherId) &&
       normalizePeriodKey(a.month) === monthKey &&
-      Number(a.year) === year
+      Number(a.year) === Number(year)
     );
   });
 
   if (existing) {
-    const updated = updateSheetRecordById(SHEETS.ATTENDANCES, existing.id, function (row) {
+    return updateSheetRecordById(SHEETS.ATTENDANCES, existing.id, function (row) {
       return {
         id: row.id,
         teacher_id: teacherId,
         month: storedMonth,
-        year: year,
-        present_days: presentDays,
-        absent_days: absentDays,
-        total_jtm: totalJtm,
+        year: Number(year),
+        present_days: cleanPresent,
+        absent_days: cleanAbsent,
+        total_jtm: cleanJtm,
       };
     });
-    return buildJsonResponse(200, { ok: true, data: updated });
   }
 
   const created = {
     id: Utilities.getUuid(),
     teacher_id: teacherId,
     month: storedMonth,
-    year: year,
-    present_days: presentDays,
-    absent_days: absentDays,
-    total_jtm: totalJtm,
+    year: Number(year),
+    present_days: cleanPresent,
+    absent_days: cleanAbsent,
+    total_jtm: cleanJtm,
   };
   appendSheetRecord(SHEETS.ATTENDANCES, created);
-  return buildJsonResponse(201, { ok: true, data: created });
+  return created;
+}
+
+function handleUpsertAttendance(payload) {
+  const teacherId = sanitizeString(payload.teacher_id);
+  const monthKey = normalizePeriodKey(payload.month);
+  const year = Number(payload.year);
+
+  if (!teacherId || !monthKey || !year || year < 2020 || year > 2100) {
+    return buildJsonResponse(400, { ok: false, error: 'Parameter kehadiran (guru, periode bulan, tahun) tidak valid.' });
+  }
+
+  const saved = upsertAttendanceSummaryRecord(
+    teacherId,
+    monthKey,
+    year,
+    payload.present_days,
+    payload.absent_days,
+    payload.total_jtm
+  );
+  return buildJsonResponse(200, { ok: true, data: saved });
+}
+
+function normalizeAttendanceLogStatus(status) {
+  var clean = sanitizeString(status).toLowerCase();
+  if (clean === 'hadir' || clean === 'tugas' || clean === 'sakit' || clean === 'izin') {
+    return clean;
+  }
+  return '';
+}
+
+function isPeriodPayrollLocked(monthNum, yearNum) {
+  var payrolls = readSheetRecords(SHEETS.PAYROLLS);
+  var targetMonth = Number(monthNum);
+  var targetYear = Number(yearNum);
+  return payrolls.some(function (p) {
+    if (Number(p.year) !== targetYear) return false;
+    if (String(p.status) === PAYROLL_STATUS.DRAFT) return false;
+    var parsed = parsePeriodMonthKeyGas(p.month);
+    return parsed.monthsInRange.indexOf(targetMonth) !== -1;
+  });
+}
+
+function syncMonthlyAttendanceFromLogs(teacherId, monthNum, yearNum) {
+  var logs = readSheetRecords(SHEETS.ATTENDANCE_LOGS).filter(function (l) {
+    return (
+      String(l.teacher_id) === String(teacherId) &&
+      Number(l.month) === Number(monthNum) &&
+      Number(l.year) === Number(yearNum)
+    );
+  });
+
+  var hadirCount = 0;
+  var tugasCount = 0;
+  var sakitCount = 0;
+  var izinCount = 0;
+  var totalJtm = 0;
+
+  logs.forEach(function (l) {
+    var st = normalizeAttendanceLogStatus(l.status) || 'hadir';
+    if (st === 'hadir') {
+      hadirCount += 1;
+      totalJtm += sanitizeDecimalNonNegative(l.jtm_hours, 0);
+    } else if (st === 'tugas') {
+      tugasCount += 1;
+      totalJtm += sanitizeDecimalNonNegative(l.jtm_hours, 0);
+    } else if (st === 'sakit') {
+      sakitCount += 1;
+    } else if (st === 'izin') {
+      izinCount += 1;
+    }
+  });
+
+  var presentDays = sanitizeDecimalNonNegative(hadirCount * 1 + tugasCount * 0.5, 0);
+  var absentDays = sakitCount + izinCount;
+
+  return upsertAttendanceSummaryRecord(teacherId, Number(monthNum), Number(yearNum), presentDays, absentDays, totalJtm);
+}
+
+function handleListAttendanceLogs(session, payload) {
+  var records = readSheetRecords(SHEETS.ATTENDANCE_LOGS);
+  var monthKey = payload.month ? normalizePeriodKey(payload.month) : '';
+  var year = payload.year ? Number(payload.year) : null;
+  var filterTeacherId = sanitizeString(payload.teacher_id);
+
+  if (session.role === ROLES.GURU) {
+    var ownTeacher = resolveOwnedTeacherRecord(session);
+    if (!ownTeacher) return forbiddenResponse();
+    records = records.filter(function (r) {
+      return String(r.teacher_id) === String(ownTeacher.id);
+    });
+  } else if (filterTeacherId) {
+    records = records.filter(function (r) {
+      return String(r.teacher_id) === filterTeacherId;
+    });
+  }
+
+  if (year) {
+    records = records.filter(function (r) {
+      return Number(r.year) === year;
+    });
+  }
+
+  if (monthKey) {
+    var parsedPeriod = parsePeriodMonthKeyGas(monthKey);
+    records = records.filter(function (r) {
+      return parsedPeriod.monthsInRange.indexOf(Number(r.month)) !== -1;
+    });
+  }
+
+  records.sort(function (a, b) {
+    return String(b.date || '').localeCompare(String(a.date || ''));
+  });
+
+  return buildJsonResponse(200, { ok: true, data: records });
+}
+
+function handleUpsertMyAttendanceLog(session, payload) {
+  var targetTeacherId = '';
+  if (session.role === ROLES.GURU) {
+    var ownTeacher = resolveOwnedTeacherRecord(session);
+    if (!ownTeacher) return forbiddenResponse();
+    targetTeacherId = String(ownTeacher.id);
+  } else {
+    targetTeacherId = sanitizeString(payload.teacher_id);
+  }
+
+  if (!targetTeacherId) {
+    return buildJsonResponse(400, { ok: false, error: 'Identitas guru tidak valid.' });
+  }
+
+  var rawDate = sanitizeString(payload.date);
+  var dateMatch = rawDate.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!dateMatch) {
+    return buildJsonResponse(400, { ok: false, error: 'Format tanggal harus YYYY-MM-DD.' });
+  }
+
+  var yearNum = Number(dateMatch[1]);
+  var monthNum = Number(dateMatch[2]);
+  if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
+    return buildJsonResponse(400, { ok: false, error: 'Tanggal kehadiran tidak valid.' });
+  }
+
+  var status = normalizeAttendanceLogStatus(payload.status);
+  if (!status) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Kondisi kehadiran harus salah satu dari: hadir, tugas, sakit, atau izin.',
+    });
+  }
+
+  if (isPeriodPayrollLocked(monthNum, yearNum)) {
+    return buildJsonResponse(409, {
+      ok: false,
+      error: 'Periode penggajian bulan ini sudah diajukan/disetujui sehingga catatan kehadiran terkunci.',
+    });
+  }
+
+  var jtmHours =
+    status === 'sakit' || status === 'izin' ? 0 : sanitizeDecimalNonNegative(payload.jtm_hours, 0);
+  var note = sanitizeString(payload.note || '').slice(0, 250);
+  var nowIso = new Date().toISOString();
+
+  var existingLogs = readSheetRecords(SHEETS.ATTENDANCE_LOGS);
+  var existing = existingLogs.find(function (l) {
+    return String(l.teacher_id) === targetTeacherId && String(l.date).trim() === rawDate;
+  });
+
+  var savedLog;
+  if (existing) {
+    savedLog = updateSheetRecordById(SHEETS.ATTENDANCE_LOGS, existing.id, function (row) {
+      return {
+        id: row.id,
+        teacher_id: targetTeacherId,
+        date: rawDate,
+        month: monthNum,
+        year: yearNum,
+        status: status,
+        jtm_hours: jtmHours,
+        note: note,
+        created_at: row.created_at || nowIso,
+        updated_at: nowIso,
+      };
+    });
+  } else {
+    savedLog = {
+      id: Utilities.getUuid(),
+      teacher_id: targetTeacherId,
+      date: rawDate,
+      month: monthNum,
+      year: yearNum,
+      status: status,
+      jtm_hours: jtmHours,
+      note: note,
+      created_at: nowIso,
+      updated_at: nowIso,
+    };
+    appendSheetRecord(SHEETS.ATTENDANCE_LOGS, savedLog);
+  }
+
+  var summary = syncMonthlyAttendanceFromLogs(targetTeacherId, monthNum, yearNum);
+  return buildJsonResponse(existing ? 200 : 201, {
+    ok: true,
+    data: {
+      log: savedLog,
+      attendanceSummary: summary,
+    },
+  });
+}
+
+function handleDeleteMyAttendanceLog(session, payload) {
+  var logId = sanitizeString(payload.id);
+  if (!logId) return notFoundResponse();
+
+  var logs = readSheetRecords(SHEETS.ATTENDANCE_LOGS);
+  var target = logs.find(function (l) {
+    return String(l.id) === logId;
+  });
+  if (!target) return notFoundResponse();
+
+  if (session.role === ROLES.GURU) {
+    var ownTeacher = resolveOwnedTeacherRecord(session);
+    if (!ownTeacher || String(target.teacher_id) !== String(ownTeacher.id)) {
+      return forbiddenResponse();
+    }
+  }
+
+  if (isPeriodPayrollLocked(target.month, target.year)) {
+    return buildJsonResponse(409, {
+      ok: false,
+      error: 'Periode penggajian bulan ini sudah diajukan/disetujui sehingga catatan tidak dapat dihapus.',
+    });
+  }
+
+  deleteSheetRecordById(SHEETS.ATTENDANCE_LOGS, logId);
+  var summary = syncMonthlyAttendanceFromLogs(target.teacher_id, target.month, target.year);
+
+  return buildJsonResponse(200, {
+    ok: true,
+    data: {
+      deletedId: logId,
+      attendanceSummary: summary,
+    },
+  });
 }
 
 function handleListPayrolls(session) {
@@ -1328,9 +1674,10 @@ function handleGeneratePayrollDraft(payload) {
 
   const teachers = readSheetRecords(SHEETS.TEACHERS);
   const components = readSheetRecords(SHEETS.SALARY_COMPONENTS);
-  const attendances = readSheetRecords(SHEETS.ATTENDANCES).filter(function (a) {
-    return normalizePeriodKey(a.month) === monthKey && Number(a.year) === year;
+  const allYearAttendances = readSheetRecords(SHEETS.ATTENDANCES).filter(function (a) {
+    return Number(a.year) === year;
   });
+  const parsedPeriod = parsePeriodMonthKeyGas(monthKey);
   const payrolls = readSheetRecords(SHEETS.PAYROLLS);
 
   const existingPayroll = payrolls.find(function (p) {
@@ -1358,14 +1705,37 @@ function handleGeneratePayrollDraft(payload) {
         position_allowance: 0,
         bpjs_deduction: 0,
       };
-    const att =
-      attendances.find(function (a) {
-        return String(a.teacher_id) === String(teacher.id);
-      }) || {
+    var att = allYearAttendances.find(function (a) {
+      return String(a.teacher_id) === String(teacher.id) && normalizePeriodKey(a.month) === monthKey;
+    });
+    if (!att && parsedPeriod.isRange) {
+      var subRows = allYearAttendances.filter(function (a) {
+        return (
+          String(a.teacher_id) === String(teacher.id) &&
+          parsedPeriod.monthsInRange.indexOf(Number(normalizePeriodKey(a.month))) !== -1
+        );
+      });
+      if (subRows.length > 0) {
+        att = {
+          present_days: subRows.reduce(function (s, r) {
+            return s + Number(r.present_days || 0);
+          }, 0),
+          absent_days: subRows.reduce(function (s, r) {
+            return s + Number(r.absent_days || 0);
+          }, 0),
+          total_jtm: subRows.reduce(function (s, r) {
+            return s + Number(r.total_jtm || 0);
+          }, 0),
+        };
+      }
+    }
+    if (!att) {
+      att = {
         present_days: 0,
         absent_days: 0,
         total_jtm: 0,
       };
+    }
 
     const baseSalary = Number(comp.base_salary || 0);
     const hourlyRate = Number(comp.hourly_rate || 0);
@@ -1765,6 +2135,14 @@ function sanitizeNonNegativeNumber(value, fallback) {
     return fallback !== undefined ? fallback : 0;
   }
   return Math.round(num);
+}
+
+function sanitizeDecimalNonNegative(value, fallback) {
+  const num = Number(value);
+  if (Number.isNaN(num) || !Number.isFinite(num) || num < 0) {
+    return fallback !== undefined ? fallback : 0;
+  }
+  return Math.round(num * 10) / 10;
 }
 
 function sanitizeForSpreadsheetCell(value) {

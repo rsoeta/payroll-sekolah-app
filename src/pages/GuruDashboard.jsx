@@ -7,6 +7,7 @@ import {
   CreditCard,
   Award,
   Calendar,
+  CalendarCheck,
   Mail,
 } from 'lucide-react';
 import api from '../services/gasApi';
@@ -14,6 +15,7 @@ import notify from '../utils/notify';
 import { formatRupiah, parseCustomComponents, getMonthName } from '../utils/formatters';
 import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
 import FloatingTabBar from '../components/FloatingTabBar';
+import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
 
 export function GuruDashboard({
   user,
@@ -29,17 +31,26 @@ export function GuruDashboard({
 
   const [summary, setSummary] = useState(null);
   const [slips, setSlips] = useState([]);
+  const [attendanceLogCount, setAttendanceLogCount] = useState(0);
   const [loading, setLoading] = useState(false);
 
   const loadGuruData = useCallback(async () => {
     setLoading(true);
     try {
-      const [sumData, mySlips] = await Promise.all([
+      const now = new Date();
+      const [sumData, mySlips, myLogs] = await Promise.all([
         api.get('dashboard.summary'),
         api.get('payslips.myList'),
+        api
+          .get('attendanceLogs.list', {
+            month: now.getMonth() + 1,
+            year: now.getFullYear(),
+          })
+          .catch(() => []),
       ]);
       setSummary(sumData);
       setSlips(mySlips || []);
+      setAttendanceLogCount(Array.isArray(myLogs) ? myLogs.length : 0);
     } catch (err) {
       notify.error(err.message || 'Gagal memuat slip gaji.');
     } finally {
@@ -52,13 +63,24 @@ export function GuruDashboard({
   }, [loadGuruData, refreshTrigger]);
 
   useEffect(() => {
-    onBadgesChange?.({ slips: slips.length });
-  }, [slips.length, onBadgesChange]);
+    onBadgesChange?.({
+      slips: slips.length,
+      attendance: attendanceLogCount > 0 ? attendanceLogCount : undefined,
+    });
+  }, [slips.length, attendanceLogCount, onBadgesChange]);
 
   useEffect(() => {
     if (!onSearchItemsChange) return;
-    onSearchItemsChange(
-      slips.map((slip) => ({
+    onSearchItemsChange([
+      {
+        id: 'guru-tab:attendance',
+        group: 'Menu Portal Guru',
+        title: 'Catat Kehadiran & JTM Mandiri',
+        sub: 'Input hadir, tugas (0,5), sakit/izin & JTM harian',
+        icon: CalendarCheck,
+        run: () => setActiveTab('attendance'),
+      },
+      ...slips.map((slip) => ({
         id: `slip:${slip.id}`,
         group: 'Slip Gaji Digital',
         title: `${getMonthName(slip.month)} ${slip.year}`,
@@ -68,8 +90,8 @@ export function GuruDashboard({
           setActiveTab('slips');
           downloadPayslipPdf(slip);
         },
-      }))
-    );
+      })),
+    ]);
   }, [slips, onSearchItemsChange, setActiveTab]);
 
   const handleDownloadPdf = (slip) => {
@@ -79,16 +101,50 @@ export function GuruDashboard({
 
   const teacherProfile = summary?.teacher || {};
 
+  const headerMeta =
+    activeTab === 'attendance'
+      ? {
+          title: 'Kehadiran & JTM Mandiri',
+          desc: 'Catat kehadiran harian (Hadir, Tugas, Sakit, Izin) dan JTM yang langsung tersinkron ke Bendahara.',
+        }
+      : activeTab === 'profile'
+      ? {
+          title: 'Profil Pendidik',
+          desc: 'Pantau identitas kepegawaian, rekening pencairan, dan ringkasan gaji bersih terakhir.',
+        }
+      : {
+          title: 'Riwayat Slip Gaji Digital',
+          desc: 'Pantau penghasilan bulanan dan unduh bukti penerimaan gaji resmi berformat PDF.',
+        };
+
   return (
     <main className="space-y-6">
       {/* Page Header */}
       <div className="nim-phead">
         <div>
           <span className="nim-eyebrow">Portal Pendidik &amp; Tenaga Kependidikan</span>
-          <h1>{activeTab === 'profile' ? 'Profil Pendidik' : 'Riwayat Slip Gaji Digital'}</h1>
-          <p>
-            Pantau penghasilan bulanan dan unduh bukti penerimaan gaji resmi berformat PDF.
-          </p>
+          <h1>{headerMeta.title}</h1>
+          <p>{headerMeta.desc}</p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setActiveTab(activeTab === 'attendance' ? 'slips' : 'attendance')}
+            className="nim-btn nim-btn--primary text-xs"
+          >
+            {activeTab === 'attendance' ? (
+              <>
+                <Wallet className="h-3.5 w-3.5" />
+                <span>Lihat Slip Gaji</span>
+              </>
+            ) : (
+              <>
+                <CalendarCheck className="h-3.5 w-3.5" />
+                <span>Catat Kehadiran &amp; JTM</span>
+              </>
+            )}
+          </button>
         </div>
       </div>
 
@@ -99,7 +155,11 @@ export function GuruDashboard({
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
         className={`nim-glass nim-card relative overflow-hidden ${
-          activeTab === 'profile' ? 'block' : 'hidden min-[761px]:block'
+          activeTab === 'profile'
+            ? 'block'
+            : activeTab === 'slips'
+            ? 'hidden min-[761px]:block'
+            : 'hidden'
         }`}
         style={{
           background:
@@ -150,13 +210,35 @@ export function GuruDashboard({
         </div>
       </motion.section>
 
+      {/* Self Attendance & JTM Section */}
+      {activeTab === 'attendance' && (
+        <motion.section
+          key="guru-attendance"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <GuruSelfAttendanceSection
+            teacherProfile={teacherProfile}
+            onLogsCountChange={setAttendanceLogCount}
+            onSyncComplete={loadGuruData}
+          />
+        </motion.section>
+      )}
+
       {/* Digital Salary Slips List */}
       <motion.section
         key={`slips-${activeTab === 'slips' ? 'active' : 'passive'}`}
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-        className={`space-y-4 ${activeTab === 'slips' ? 'block' : 'hidden min-[761px]:block'}`}
+        className={`space-y-4 ${
+          activeTab === 'slips'
+            ? 'block'
+            : activeTab === 'profile'
+            ? 'hidden min-[761px]:block'
+            : 'hidden'
+        }`}
       >
         <div className="flex items-center justify-between">
           <div>
@@ -305,6 +387,12 @@ export function GuruDashboard({
         onChange={setActiveTab}
         tabs={[
           { id: 'slips', label: 'Slip Gaji Digital', icon: Wallet, badge: slips.length },
+          {
+            id: 'attendance',
+            label: 'Kehadiran & JTM',
+            icon: CalendarCheck,
+            badge: attendanceLogCount > 0 ? attendanceLogCount : undefined,
+          },
           { id: 'profile', label: 'Profil Saya', icon: ShieldCheck },
         ]}
       />

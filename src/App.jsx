@@ -133,6 +133,14 @@ export function App() {
             description: 'Riwayat slip gaji resmi & unduh PDF',
           },
           {
+            id: 'attendance',
+            label: 'Kehadiran & JTM',
+            group: 'Portal Pendidik',
+            icon: CalendarCheck,
+            badge: navBadges.attendance,
+            description: 'Catat hadir, tugas, sakit/izin & JTM mandiri',
+          },
+          {
             id: 'profile',
             label: 'Profil Saya',
             group: 'Portal Pendidik',
