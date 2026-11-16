@@ -89,14 +89,58 @@ export function formatAttendanceNumber(value) {
   return String(rounded).replace('.', ',');
 }
 
+export const VALIDATION_STATUS_META = {
+  pending: {
+    id: 'pending',
+    label: 'Belum Divalidasi',
+    shortLabel: 'Menunggu',
+    badgeCls: 'nim-badge nim-badge--warn',
+  },
+  valid: {
+    id: 'valid',
+    label: 'Valid (Dihitung)',
+    shortLabel: 'Valid',
+    badgeCls: 'nim-badge nim-badge--good',
+  },
+  invalid: {
+    id: 'invalid',
+    label: 'Tidak Valid (Ditolak)',
+    shortLabel: 'Tidak Valid',
+    badgeCls: 'nim-badge nim-badge--bad',
+  },
+};
+
+export function normalizeLogValidationStatus(status) {
+  const clean = String(status || '')
+    .trim()
+    .toLowerCase();
+  if (clean === 'valid' || clean === 'invalid' || clean === 'pending') return clean;
+  return 'pending';
+}
+
+export function getLogValidationMeta(status) {
+  return VALIDATION_STATUS_META[normalizeLogValidationStatus(status)];
+}
+
 export function computeAttendanceBreakdownFromLogs(logs = []) {
   let hadirCount = 0;
   let tugasCount = 0;
   let sakitCount = 0;
   let izinCount = 0;
   let totalJtm = 0;
+  let validCount = 0;
+  let pendingCount = 0;
+  let invalidCount = 0;
 
   for (const log of logs) {
+    const vStatus = normalizeLogValidationStatus(log.validation_status);
+    if (vStatus === 'valid') validCount += 1;
+    else if (vStatus === 'invalid') invalidCount += 1;
+    else pendingCount += 1;
+
+    // Log yang dianggap tidak valid oleh Admin/Bendahara tidak dihitung ke Kehadiran & JTM
+    if (vStatus === 'invalid') continue;
+
     const status = normalizeAttendanceStatus(log.status);
     const meta = getAttendanceConditionMeta(status);
     if (status === 'hadir') hadirCount += 1;
@@ -117,6 +161,10 @@ export function computeAttendanceBreakdownFromLogs(logs = []) {
     tugas_count: tugasCount,
     sakit_count: sakitCount,
     izin_count: izinCount,
+    valid_count: validCount,
+    pending_count: pendingCount,
+    invalid_count: invalidCount,
+    counted_log_count: validCount + pendingCount,
     log_count: logs.length,
   };
 }

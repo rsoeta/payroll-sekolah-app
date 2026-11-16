@@ -20,6 +20,8 @@ import {
   ChevronDown,
   ChevronUp,
   ClipboardList,
+  Check,
+  Ban,
 } from 'lucide-react';
 import api from '../services/gasApi';
 import notify from '../utils/notify';
@@ -43,6 +45,8 @@ import {
   formatAttendanceNumber,
   formatDateIndo,
   getAttendanceConditionMeta,
+  getLogValidationMeta,
+  normalizeLogValidationStatus,
 } from '../utils/attendanceHelpers';
 import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
 import ConfirmModal from '../components/ConfirmModal';
@@ -117,6 +121,8 @@ export function AdminDashboard({
   const [attendances, setAttendances] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [expandedLogTeacherIds, setExpandedLogTeacherIds] = useState({});
+  const [validatingKey, setValidatingKey] = useState('');
+  const [rejectNoteEdits, setRejectNoteEdits] = useState({});
   const [startMonth, setStartMonth] = useState(11);
   const [endMonth, setEndMonth] = useState(11);
   const [selectedYear, setSelectedYear] = useState(2026);
@@ -460,6 +466,41 @@ export function AdminDashboard({
       loadAllData();
     } catch (err) {
       notify.error(err.message || 'Gagal menyimpan kehadiran kolektif.');
+    }
+  };
+
+  const handleValidateAttendanceLogs = async (
+    ids,
+    validationStatus,
+    validationNote = '',
+    keyTag = ''
+  ) => {
+    const cleanIds = (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+    if (cleanIds.length === 0) return;
+
+    setValidatingKey(keyTag || cleanIds[0]);
+    try {
+      await api.post('attendanceLogs.validate', {
+        ids: cleanIds,
+        validation_status: validationStatus,
+        validation_note: String(validationNote || '').trim(),
+      });
+      if (validationStatus === 'valid') {
+        notify.success(
+          cleanIds.length > 1
+            ? `${cleanIds.length} log catatan guru divalidasi & dihitung ke Kehadiran & JTM.`
+            : 'Log divalidasi (dihitung ke Kehadiran & JTM).'
+        );
+      } else if (validationStatus === 'invalid') {
+        notify.warn('Log ditandai Tidak Valid & dikeluarkan dari hitungan Kehadiran & JTM.');
+      } else {
+        notify.info('Status validasi log dikembalikan ke Belum Divalidasi.');
+      }
+      await loadAllData();
+    } catch (err) {
+      notify.error(err.message || 'Gagal memperbarui status validasi log.');
+    } finally {
+      setValidatingKey('');
     }
   };
 
@@ -1210,13 +1251,52 @@ export function AdminDashboard({
                           className="rounded-xl border border-emerald-200/80 bg-emerald-50/50 p-3 space-y-2 text-xs"
                         >
                           <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-1.5 font-semibold text-emerald-800">
+                            <div className="flex flex-wrap items-center gap-1.5 font-semibold text-emerald-800">
                               <ClipboardList className="h-3.5 w-3.5 shrink-0" />
                               <span>
-                                Catatan Mandiri Guru ({logBreakdown.log_count} hari tercatat)
+                                Catatan Mandiri ({logBreakdown.counted_log_count}/
+                                {logBreakdown.log_count} entri terhitung)
                               </span>
+                              {logBreakdown.pending_count > 0 && (
+                                <span className="nim-badge nim-badge--warn !text-[10px]">
+                                  {logBreakdown.pending_count} Belum Divalidasi
+                                </span>
+                              )}
+                              {logBreakdown.invalid_count > 0 && (
+                                <span className="nim-badge nim-badge--bad !text-[10px]">
+                                  {logBreakdown.invalid_count} Tidak Valid
+                                </span>
+                              )}
                             </div>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {logBreakdown.pending_count > 0 && (
+                                <button
+                                  type="button"
+                                  disabled={Boolean(validatingKey)}
+                                  onClick={() =>
+                                    handleValidateAttendanceLogs(
+                                      teacherLogs
+                                        .filter(
+                                          (l) =>
+                                            normalizeLogValidationStatus(l.validation_status) ===
+                                            'pending'
+                                        )
+                                        .map((l) => l.id),
+                                      'valid',
+                                      '',
+                                      `bulk:${teacher.id}`
+                                    )
+                                  }
+                                  className="inline-flex items-center gap-1 rounded-lg border border-emerald-400 bg-emerald-600 px-2 py-0.5 text-[11px] font-semibold text-white hover:bg-emerald-700 disabled:opacity-60"
+                                >
+                                  <Check className="h-3 w-3" />
+                                  <span>
+                                    {validatingKey === `bulk:${teacher.id}`
+                                      ? 'Memvalidasi...'
+                                      : 'Validasi Semua'}
+                                  </span>
+                                </button>
+                              )}
                               <button
                                 type="button"
                                 onClick={() => {
@@ -1229,7 +1309,7 @@ export function AdminDashboard({
                                     },
                                   }));
                                   notify.info(
-                                    `Nilai rekap ${teacher.name} disinkronkan dari log mandiri guru.`
+                                    `Nilai rekap ${teacher.name} disinkronkan dari log valid.`
                                   );
                                 }}
                                 className="rounded-lg border border-emerald-300 bg-white px-2 py-0.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-50"
@@ -1246,7 +1326,7 @@ export function AdminDashboard({
                                 }
                                 className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2 py-0.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
                               >
-                                <span>{isLogsExpanded ? 'Tutup Log' : 'Lihat Log'}</span>
+                                <span>{isLogsExpanded ? 'Tutup Log' : 'Validasi / Lihat Log'}</span>
                                 {isLogsExpanded ? (
                                   <ChevronUp className="h-3 w-3" />
                                 ) : (
@@ -1274,8 +1354,8 @@ export function AdminDashboard({
                             </span>
                             <span>•</span>
                             <span className="font-semibold text-emerald-800">
-                              Total: {formatAttendanceNumber(logBreakdown.present_days)} Hadir /{' '}
-                              {formatAttendanceNumber(logBreakdown.total_jtm)} JTM (
+                              Total Terhitung: {formatAttendanceNumber(logBreakdown.present_days)}{' '}
+                              Hadir / {formatAttendanceNumber(logBreakdown.total_jtm)} JTM (
                               {classBreakdown.length} Kelas)
                             </span>
                           </div>
@@ -1298,35 +1378,140 @@ export function AdminDashboard({
                           )}
 
                           {isLogsExpanded && (
-                            <div className="mt-2 max-h-44 overflow-y-auto space-y-1.5 border-t border-emerald-200/70 pt-2">
+                            <div className="mt-2 max-h-60 overflow-y-auto space-y-2 border-t border-emerald-200/70 pt-2">
                               {teacherLogs.map((lg) => {
                                 const cond = getAttendanceConditionMeta(lg.status);
+                                const vStatus = normalizeLogValidationStatus(lg.validation_status);
+                                const vMeta = getLogValidationMeta(vStatus);
+                                const isInvalid = vStatus === 'invalid';
+                                const isBusy = validatingKey === lg.id;
+                                const noteDraft =
+                                  rejectNoteEdits[lg.id] !== undefined
+                                    ? rejectNoteEdits[lg.id]
+                                    : lg.validation_note || '';
+
                                 return (
                                   <div
                                     key={lg.id}
-                                    className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-white/90 px-2.5 py-1.5 text-[11px] border border-slate-100"
+                                    className={`rounded-lg px-2.5 py-2 text-[11px] border space-y-1.5 ${
+                                      isInvalid
+                                        ? 'border-rose-300 bg-rose-50/70'
+                                        : vStatus === 'valid'
+                                        ? 'border-emerald-300/80 bg-white'
+                                        : 'border-slate-200 bg-white/95'
+                                    }`}
                                   >
-                                    <div className="min-w-0">
-                                      <span className="font-semibold text-slate-800">
-                                        {formatDateIndo(lg.date)}
-                                      </span>{' '}
-                                      <span className="inline-block rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
-                                        {lg.class_name || 'Kelas Umum'}
-                                      </span>{' '}
-                                      <span className="text-slate-500">
-                                        — {cond.label} ({cond.badgeText})
-                                      </span>
-                                      {lg.note && (
-                                        <span className="block text-[10.5px] text-slate-500 truncate">
-                                          {lg.note}
+                                    <div className="flex flex-wrap items-start justify-between gap-2">
+                                      <div className="min-w-0 space-y-0.5">
+                                        <div className="flex flex-wrap items-center gap-1.5">
+                                          <span className="font-semibold text-slate-800">
+                                            {formatDateIndo(lg.date)}
+                                          </span>
+                                          <span className="inline-block rounded bg-indigo-50 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700">
+                                            {lg.class_name || 'Kelas Umum'}
+                                          </span>
+                                          <span className="text-slate-600">
+                                            — {cond.label} ({cond.badgeText})
+                                          </span>
+                                          <span className={`${vMeta.badgeCls} !text-[9.5px]`}>
+                                            {vMeta.shortLabel}
+                                          </span>
+                                        </div>
+                                        {lg.note && (
+                                          <span className="block text-[10.5px] text-slate-500">
+                                            Catatan Guru: “{lg.note}”
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                                        <span
+                                          className={`font-bold tabular-nums mr-1 ${
+                                            isInvalid
+                                              ? 'line-through text-rose-500'
+                                              : 'text-indigo-700'
+                                          }`}
+                                        >
+                                          +{formatAttendanceNumber(cond.presentWeight)} •{' '}
+                                          {formatAttendanceNumber(
+                                            cond.allowsJtm ? lg.jtm_hours : 0
+                                          )}{' '}
+                                          JTM
                                         </span>
-                                      )}
+
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() =>
+                                            handleValidateAttendanceLogs(lg.id, 'valid', '', lg.id)
+                                          }
+                                          title="Tandai log ini Valid (masuk hitungan Kehadiran & JTM)"
+                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-semibold border transition-colors ${
+                                            vStatus === 'valid'
+                                              ? 'border-emerald-600 bg-emerald-600 text-white'
+                                              : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50'
+                                          }`}
+                                        >
+                                          <Check className="h-3 w-3" />
+                                          <span>Valid</span>
+                                        </button>
+
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() =>
+                                            handleValidateAttendanceLogs(
+                                              lg.id,
+                                              'invalid',
+                                              noteDraft,
+                                              lg.id
+                                            )
+                                          }
+                                          title="Tandai Tidak Valid (tidak dihitung ke Kehadiran & JTM)"
+                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-semibold border transition-colors ${
+                                            isInvalid
+                                              ? 'border-rose-600 bg-rose-600 text-white'
+                                              : 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50'
+                                          }`}
+                                        >
+                                          <Ban className="h-3 w-3" />
+                                          <span>Tidak Valid</span>
+                                        </button>
+                                      </div>
                                     </div>
-                                    <span className="font-bold text-indigo-700 tabular-nums shrink-0">
-                                      +{formatAttendanceNumber(cond.presentWeight)} •{' '}
-                                      {formatAttendanceNumber(cond.allowsJtm ? lg.jtm_hours : 0)}{' '}
-                                      JTM
-                                    </span>
+
+                                    {isInvalid && (
+                                      <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-rose-200/70">
+                                        <input
+                                          type="text"
+                                          maxLength={160}
+                                          value={noteDraft}
+                                          onChange={(e) =>
+                                            setRejectNoteEdits((prev) => ({
+                                              ...prev,
+                                              [lg.id]: e.target.value,
+                                            }))
+                                          }
+                                          placeholder="Alasan penolakan (opsional, misal: tidak sesuai jadwal)..."
+                                          className="flex-1 min-w-[160px] rounded-md border border-rose-200 bg-white px-2 py-0.5 text-[10.5px] text-slate-700 focus:border-rose-400 focus:outline-none"
+                                        />
+                                        <button
+                                          type="button"
+                                          disabled={isBusy}
+                                          onClick={() =>
+                                            handleValidateAttendanceLogs(
+                                              lg.id,
+                                              'invalid',
+                                              noteDraft,
+                                              lg.id
+                                            )
+                                          }
+                                          className="rounded-md bg-rose-600 px-2 py-0.5 text-[10.5px] font-semibold text-white hover:bg-rose-700"
+                                        >
+                                          Simpan Alasan
+                                        </button>
+                                      </div>
+                                    )}
                                   </div>
                                 );
                               })}

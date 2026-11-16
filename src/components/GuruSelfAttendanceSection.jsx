@@ -25,9 +25,11 @@ import {
   formatAttendanceNumber,
   formatDateIndo,
   getAttendanceConditionMeta,
+  getLogValidationMeta,
   getTodayIsoDate,
   normalizeAttendanceStatus,
   normalizeIsoDateOnly,
+  normalizeLogValidationStatus,
 } from '../utils/attendanceHelpers';
 
 const CUSTOM_CLASSES_STORAGE_KEY = 'sipayroll_guru_classes_v1';
@@ -552,6 +554,22 @@ export function GuruSelfAttendanceSection({
         </div>
       </div>
 
+      {breakdown.invalid_count > 0 && (
+        <div
+          className="nim-card-well flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-xs"
+          style={{
+            background: 'var(--bad-soft)',
+            borderLeft: '3px solid var(--bad-text)',
+            color: 'var(--bad-text)',
+          }}
+        >
+          <span>
+            <strong>{breakdown.invalid_count} catatan ditandai Tidak Valid</strong> oleh
+            Admin/Bendahara dan <strong>tidak dihitung</strong> ke rekap Kehadiran &amp; JTM.
+          </span>
+        </div>
+      )}
+
       {/* Sync Info against Admin Recorded Attendance */}
       {adminSummary && (
         <div
@@ -928,13 +946,18 @@ export function GuruSelfAttendanceSection({
               <div className="space-y-2 max-h-[380px] overflow-y-auto pr-0.5">
                 {logs.map((log) => {
                   const cond = getAttendanceConditionMeta(log.status);
+                  const vStatus = normalizeLogValidationStatus(log.validation_status);
+                  const vMeta = getLogValidationMeta(vStatus);
+                  const isInvalid = vStatus === 'invalid';
                   const isActiveDate =
                     normalizeIsoDateOnly(log.date) === normalizeIsoDateOnly(dateInput);
                   return (
                     <div
                       key={log.id}
                       className={`rounded-xl border p-3 transition-colors ${
-                        isActiveDate
+                        isInvalid
+                          ? 'border-rose-300 bg-rose-50/50 opacity-85'
+                          : isActiveDate
                           ? 'border-indigo-300 bg-indigo-50/40'
                           : 'border-[var(--line)] bg-[var(--surface)]'
                       }`}
@@ -951,8 +974,15 @@ export function GuruSelfAttendanceSection({
                             <span className={`${TONE_BADGE_CLASS[cond.tone]} !text-[10.5px]`}>
                               {cond.label}
                             </span>
+                            <span className={`${vMeta.badgeCls} !text-[10px]`}>
+                              {vMeta.label}
+                            </span>
                           </div>
-                          <p className="text-[11px] text-[var(--muted)] tabular-nums">
+                          <p
+                            className={`text-[11px] text-[var(--muted)] tabular-nums ${
+                              isInvalid ? 'line-through' : ''
+                            }`}
+                          >
                             Nilai hadir:{' '}
                             <strong className="text-[var(--ink)]">
                               +{formatAttendanceNumber(cond.presentWeight)}
@@ -964,6 +994,12 @@ export function GuruSelfAttendanceSection({
                               {formatAttendanceNumber(cond.allowsJtm ? log.jtm_hours : 0)} jam
                             </strong>
                           </p>
+                          {isInvalid && (
+                            <p className="text-[11px] font-semibold text-[var(--bad-text)]">
+                              Tidak dihitung ke Kehadiran &amp; JTM
+                              {log.validation_note ? ` (${log.validation_note})` : ''}
+                            </p>
+                          )}
                           {log.note && (
                             <p className="text-[11px] text-[var(--ink-2)] break-words">
                               “{log.note}”

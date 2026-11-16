@@ -17,6 +17,7 @@ import {
 import {
   computeAttendanceBreakdownFromLogs,
   normalizeAttendanceStatus,
+  normalizeLogValidationStatus,
   roundAttendanceMetric,
 } from '../utils/attendanceHelpers';
 
@@ -1325,6 +1326,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status,
           jtm_hours: jtmHours,
           note,
+          validation_status: 'pending',
+          validation_note: '',
           updated_at: nowIso,
         };
         db.Attendance_Logs[existingIdx] = savedLog;
@@ -1339,6 +1342,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status,
           jtm_hours: jtmHours,
           note,
+          validation_status: 'pending',
+          validation_note: '',
           created_at: nowIso,
           updated_at: nowIso,
         };
@@ -1417,6 +1422,11 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       const nowIso = new Date().toISOString();
       const nextDateLogs = [];
 
+      if (!Array.isArray(db.Attendance_Logs)) db.Attendance_Logs = [];
+      const prevDateLogs = db.Attendance_Logs.filter(
+        (l) => l.teacher_id === targetTeacherId && l.date === rawDate
+      );
+
       for (const entry of rawEntries) {
         const className = String(entry?.class_name || '').trim().slice(0, 80);
         if (!className) continue;
@@ -1429,8 +1439,17 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status === 'sakit' || status === 'izin' ? 0 : roundAttendanceMetric(entry.jtm_hours || 0);
         const note = String(entry.note || '').trim().slice(0, 250);
 
+        const prevMatch = prevDateLogs.find(
+          (pl) => String(pl.class_name || '').trim().toLowerCase() === key
+        );
+        const isUnchanged =
+          prevMatch &&
+          prevMatch.status === status &&
+          Number(prevMatch.jtm_hours || 0) === Number(jtmHours) &&
+          String(prevMatch.note || '') === note;
+
         nextDateLogs.push({
-          id: generateUuidV4(),
+          id: prevMatch ? prevMatch.id : generateUuidV4(),
           teacher_id: targetTeacherId,
           date: rawDate,
           class_name: className,
@@ -1439,12 +1458,15 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status,
           jtm_hours: jtmHours,
           note,
-          created_at: nowIso,
+          validation_status: isUnchanged
+            ? normalizeLogValidationStatus(prevMatch.validation_status)
+            : 'pending',
+          validation_note: isUnchanged ? String(prevMatch.validation_note || '') : '',
+          created_at: prevMatch?.created_at || nowIso,
           updated_at: nowIso,
         });
       }
 
-      if (!Array.isArray(db.Attendance_Logs)) db.Attendance_Logs = [];
       db.Attendance_Logs = db.Attendance_Logs.filter(
         (l) => !(l.teacher_id === targetTeacherId && l.date === rawDate)
       ).concat(nextDateLogs);
@@ -1546,6 +1568,102 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         ok: true,
         status: 200,
         data: { deletedId: target.id, attendanceSummary: attSummary },
+      };
+    }
+
+    case 'attendanceLogs.validate': {
+      if (session.role !== 'admin') return forbidden();
+      const ids = Array.isArray(payload.ids)
+        ? payload.ids.map((x) => String(x || '').trim()).filter(Boolean)
+        : payload.id
+        ? [String(payload.id).trim()]
+        : [];
+      if (ids.length === 0) {
+        return { ok: false, status: 400, error: 'ID catatan kehadiran tidak ditemukan.' };
+      }
+
+      const vStatus = normalizeLogValidationStatus(payload.validation_status);
+      const vNote = String(payload.validation_note || '').trim().slice(0, 250);
+      const nowIso = new Date().toISOString();
+
+      if (!Array.isArray(db.Attendance_Logs)) db.Attendance_Logs = [];
+      const idSet = new Set(ids);
+      const affectedPeriods = new Map();
+      const updatedLogs = [];
+
+      db.Attendance_Logs.forEach((log, idx) => {
+        if (!idSet.has(log.id)) return;
+        const nextRow = {
+          ...log,
+          validation_status: vStatus,
+          validation_note: vStatus === 'invalid' ? vNote : '',
+          updated_at: nowIso,
+        };
+        db.Attendance_Logs[idx] = nextRow;
+        updatedLogs.push(nextRow);
+        affectedPeriods.set(`${log.teacher_id}:${log.month}:${log.year}`, {
+          teacher_id: log.teacher_id,
+          month: Number(log.month),
+          year: Number(log.year),
+        });
+      });
+
+      if (updatedLogs.length === 0) {
+        return { ok: false, status: 404, error: 'Catatan kehadiran tidak ditemukan.' };
+      }
+
+      const lockedPeriod = Array.from(affectedPeriods.values()).some((per) =>
+        (db.Payrolls || []).some((p) => {
+          if (Number(p.year) !== per.year || p.status === 'draft') return false;
+          return parsePeriodMonthKey(p.month).monthsInRange.includes(per.month);
+        })
+      );
+      if (lockedPeriod) {
+        return {
+          ok: false,
+          status: 409,
+          error:
+            'Periode penggajian bulan ini sudah diajukan/disetujui sehingga validasi terkunci.',
+        };
+      }
+
+      let lastSummary = null;
+      affectedPeriods.forEach((per) => {
+        const monthLogs = db.Attendance_Logs.filter(
+          (l) =>
+            l.teacher_id === per.teacher_id &&
+            Number(l.month) === per.month &&
+            Number(l.year) === per.year
+        );
+        const breakdown = computeAttendanceBreakdownFromLogs(monthLogs);
+        const attIdx = db.Attendances.findIndex(
+          (a) =>
+            a.teacher_id === per.teacher_id &&
+            normalizePeriodKey(a.month) === String(per.month) &&
+            Number(a.year) === per.year
+        );
+        const attSummary = {
+          id: attIdx !== -1 ? db.Attendances[attIdx].id : generateUuidV4(),
+          teacher_id: per.teacher_id,
+          month: per.month,
+          year: per.year,
+          present_days: breakdown.present_days,
+          absent_days: breakdown.absent_days,
+          total_jtm: breakdown.total_jtm,
+        };
+        if (attIdx !== -1) {
+          db.Attendances[attIdx] = attSummary;
+        } else {
+          db.Attendances.push(attSummary);
+        }
+        lastSummary = attSummary;
+      });
+
+      saveDb(db);
+      return {
+        ok: true,
+        status: 200,
+        data: { updatedLogs, attendanceSummary: lastSummary },
       };
     }
 
