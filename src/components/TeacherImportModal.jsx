@@ -13,7 +13,9 @@ import {
 import {
   formatRupiah,
   formatRibuan,
+  getStaffCategoryLabel,
   parseRibuan,
+  resolveStaffCategory,
   sanitizeClientString,
 } from '../utils/formatters';
 import notify from '../utils/notify';
@@ -21,6 +23,7 @@ import notify from '../utils/notify';
 const TEMPLATE_HEADERS = [
   'nip',
   'name',
+  'staff_category',
   'status',
   'bank_account',
   'base_salary',
@@ -34,6 +37,7 @@ const SAMPLE_ROWS = [
   [
     '19900215201901',
     'Ahmad Fauzi, S.Pd.',
+    'pendidik',
     'GTY (Guru Tetap Yayasan)',
     'BSI 7192837465',
     3500000,
@@ -44,11 +48,12 @@ const SAMPLE_ROWS = [
   ],
   [
     '19940710202202',
-    'Nadia Putri, M.Pd.',
-    'GTT (Guru Tidak Tetap)',
+    'Nadia Putri, A.Md.',
+    'kependidikan',
+    'Staf Tata Usaha (TU)',
     'Mandiri 137009876543',
     2500000,
-    50000,
+    0,
     350000,
     'TIDAK',
     'nadia.putri@gmail.com',
@@ -62,18 +67,19 @@ export function downloadTeacherImportTemplate() {
   worksheet['!cols'] = [
     { wch: 18 },
     { wch: 26 },
+    { wch: 16 },
     { wch: 26 },
     { wch: 22 },
     { wch: 15 },
     { wch: 14 },
     { wch: 18 },
-    { wch: 15 },
+    { wch: 20 },
     { wch: 28 },
   ];
 
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Master_Guru_Gaji');
-  XLSX.writeFile(workbook, 'Template_Import_Guru_SIPAYROLL.xlsx');
+  XLSX.utils.book_append_sheet(workbook, worksheet, 'Master_PTK_Gaji');
+  XLSX.writeFile(workbook, 'Template_Import_PTK_SIPAYROLL.xlsx');
 }
 
 function parseTeacherSheetRows(rawRows, existingTeachers = []) {
@@ -100,8 +106,9 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
   };
 
   const idxNip = colIndex(['nip', 'niy', 'nip/niy']);
-  const idxName = colIndex(['name', 'nama', 'nama_lengkap', 'nama_guru']);
-  const idxStatus = colIndex(['status', 'status_kepegawaian']);
+  const idxName = colIndex(['name', 'nama', 'nama_lengkap', 'nama_guru', 'nama_ptk']);
+  const idxCategory = colIndex(['staff_category', 'kategori', 'kategori_ptk', 'jenis_ptk']);
+  const idxStatus = colIndex(['status', 'status_kepegawaian', 'jabatan']);
   const idxBank = colIndex(['bank_account', 'rekening', 'nomor_rekening', 'no_rekening']);
   const idxBase = colIndex(['base_salary', 'gaji_pokok']);
   const idxRate = colIndex(['hourly_rate', 'tarif_jtm', 'tarif_per_jtm']);
@@ -121,21 +128,32 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
     existingTeachers.map((t) => [String(t.nip || '').trim().toLowerCase(), t])
   );
 
+  // Support both new 10-column template (with `staff_category`) and legacy 9-column sheet
+  const hasCategoryCol = idxCategory !== -1;
+
   return nonEmptyRows.slice(1).map((cells, index) => {
     const getCell = (idx, fallback = '') =>
       idx !== -1 && cells[idx] !== undefined && cells[idx] !== null ? cells[idx] : fallback;
 
     const nip = sanitizeClientString(String(getCell(idxNip, cells[0] ?? '')));
     const name = sanitizeClientString(String(getCell(idxName, cells[1] ?? '')));
+    const rawCat = hasCategoryCol
+      ? sanitizeClientString(String(getCell(idxCategory, cells[2] ?? '')))
+      : '';
     const status =
-      sanitizeClientString(String(getCell(idxStatus, cells[2] ?? ''))) ||
+      sanitizeClientString(String(getCell(idxStatus, cells[hasCategoryCol ? 3 : 2] ?? ''))) ||
       'GTY (Guru Tetap Yayasan)';
-    const bank_account = sanitizeClientString(String(getCell(idxBank, cells[3] ?? '')));
-    const base_salary = parseRibuan(getCell(idxBase, cells[4] ?? 0));
-    const hourly_rate = parseRibuan(getCell(idxRate, cells[5] ?? 0));
-    const position_allowance = parseRibuan(getCell(idxAllowance, cells[6] ?? 0));
+    const staff_category = resolveStaffCategory({ staff_category: rawCat, status });
+    const bank_account = sanitizeClientString(
+      String(getCell(idxBank, cells[hasCategoryCol ? 4 : 3] ?? ''))
+    );
+    const base_salary = parseRibuan(getCell(idxBase, cells[hasCategoryCol ? 5 : 4] ?? 0));
+    const hourly_rate = parseRibuan(getCell(idxRate, cells[hasCategoryCol ? 6 : 5] ?? 0));
+    const position_allowance = parseRibuan(
+      getCell(idxAllowance, cells[hasCategoryCol ? 7 : 6] ?? 0)
+    );
 
-    const rawInfaqCell = getCell(idxInfaq, cells[7] ?? 'TIDAK');
+    const rawInfaqCell = getCell(idxInfaq, cells[hasCategoryCol ? 8 : 7] ?? 'TIDAK');
     const infaqToken = String(rawInfaqCell ?? '')
       .trim()
       .toLowerCase();
@@ -152,7 +170,9 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
         parseRibuan(rawInfaqCell) > 0);
     const bpjs_deduction = infaq_zakat_enabled ? 1 : 0;
 
-    const email = sanitizeClientString(String(getCell(idxEmail, cells[8] ?? '')))
+    const email = sanitizeClientString(
+      String(getCell(idxEmail, cells[hasCategoryCol ? 9 : 8] ?? ''))
+    )
       .trim()
       .toLowerCase();
 
@@ -176,6 +196,7 @@ function parseTeacherSheetRows(rawRows, existingTeachers = []) {
       errorReason,
       nip,
       name,
+      staff_category,
       status,
       bank_account,
       base_salary,
@@ -295,11 +316,11 @@ export function TeacherImportModal({
             </div>
             <div>
               <h3 id="import-teacher-modal-title" className="text-base sm:text-lg font-bold text-[var(--ink)]">
-                Import Master Data Guru &amp; Komponen Gaji (.XLSX)
+                Import Master Data PTK &amp; Komponen Gaji (.XLSX)
               </h3>
               <p className="text-xs text-[var(--muted)]">
-                Unggah file Microsoft Excel (.xlsx) untuk menambahkan atau memperbarui data Guru,
-                Komponen Gaji, serta alamat Akun Gmail secara masal.
+                Unggah file Microsoft Excel (.xlsx) untuk menambah/memperbarui Tenaga Pendidik
+                (Guru), Tenaga Kependidikan, Komponen Gaji, &amp; Gmail secara massal.
               </p>
             </div>
           </div>
@@ -355,8 +376,9 @@ export function TeacherImportModal({
             </div>
 
             <div className="nim-card-well mt-3 p-2.5 text-[11px] text-[var(--muted)] font-mono overflow-x-auto">
-              Kolom: nip | name | status | bank_account | base_salary | hourly_rate |
-              position_allowance | infaq_zakat_enabled (YA/TIDAK) | email (Alamat Gmail)
+              Kolom: nip | name | staff_category (pendidik/kependidikan) | status | bank_account |
+              base_salary | hourly_rate | position_allowance | infaq_zakat_enabled (YA/TIDAK) |
+              email (Alamat Gmail)
             </div>
           </div>
 
@@ -376,10 +398,11 @@ export function TeacherImportModal({
               <Upload className="h-5 w-5" />
             </div>
             <p className="mt-2.5 text-sm font-bold text-[var(--ink)]">
-              {fileName ? `File Terpilih: ${fileName}` : 'Pilih File Excel (.XLSX) Master Guru & Gaji'}
+              {fileName ? `File Terpilih: ${fileName}` : 'Pilih File Excel (.XLSX) Master PTK & Gaji'}
             </p>
             <p className="mt-1 text-xs text-[var(--muted)]">
-              Jika NIP sudah terdaftar, data guru, komponen gaji, &amp; akun Gmail akan diperbarui otomatis.
+              Jika NIP sudah terdaftar, data PTK, kategori, komponen gaji, &amp; akun Gmail akan
+              diperbarui otomatis.
             </p>
             <div className="mt-3 flex justify-center">
               <button
@@ -435,6 +458,15 @@ export function TeacherImportModal({
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div className="flex flex-wrap items-center gap-2">
                         <span className="nim-badge font-mono">Baris #{row.rowNumber}</span>
+                        <span
+                          className={`nim-badge ${
+                            row.staff_category === 'kependidikan'
+                              ? 'nim-badge--warn'
+                              : 'nim-badge--good'
+                          }`}
+                        >
+                          {getStaffCategoryLabel(row.staff_category)}
+                        </span>
                         <span className="font-bold text-[var(--ink)]">{row.name || '(Tanpa Nama)'}</span>
                         <span className="text-[var(--muted)]">NIP: {row.nip || '-'}</span>
                         {row.email && (

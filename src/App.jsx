@@ -83,11 +83,11 @@ export function App() {
           },
           {
             id: 'teachers',
-            label: 'Master Guru & Gaji',
+            label: 'Master PTK & Gaji',
             group: 'Data & Institusi',
             icon: Users,
             badge: navBadges.teachers,
-            description: 'Kelola profil pendidik dan komponen gaji',
+            description: 'Kelola Pendidik, Tenaga Kependidikan & komponen gaji',
           },
           {
             id: 'school_profile',
@@ -127,7 +127,7 @@ export function App() {
           {
             id: 'slips',
             label: 'Slip Gaji Digital',
-            group: 'Portal Pendidik',
+            group: 'Portal PTK',
             icon: Wallet,
             badge: navBadges.slips,
             description: 'Riwayat slip gaji resmi & unduh PDF',
@@ -135,7 +135,7 @@ export function App() {
           {
             id: 'attendance',
             label: 'Kehadiran & JTM',
-            group: 'Portal Pendidik',
+            group: 'Portal PTK',
             icon: CalendarCheck,
             badge: navBadges.attendance,
             description: 'Catat hadir, tugas, sakit/izin & JTM mandiri',
@@ -143,9 +143,9 @@ export function App() {
           {
             id: 'profile',
             label: 'Profil Saya',
-            group: 'Portal Pendidik',
+            group: 'Portal PTK',
             icon: ShieldCheck,
-            description: 'Identitas pendidik dan ringkasan penghasilan',
+            description: 'Identitas Pendidik / Tenaga Kependidikan & penghasilan',
           },
         ];
       default:

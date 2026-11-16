@@ -12,6 +12,7 @@ import {
   isInfaqZakatEnabled,
   normalizePeriodKey,
   parsePeriodMonthKey,
+  resolveStaffCategory,
 } from '../utils/formatters';
 import {
   computeAttendanceBreakdownFromLogs,
@@ -100,6 +101,7 @@ async function buildInitialDatabase() {
       user_id: SEED_IDS.userGuru1,
       nip: '19880412201501',
       name: 'Budi Santoso, S.Pd., M.Pd.',
+      staff_category: 'pendidik',
       status: 'GTY (Guru Tetap Yayasan)',
       bank_account: 'BSI 7149283741',
       email: 'budi.santoso@gmail.com',
@@ -109,6 +111,7 @@ async function buildInitialDatabase() {
       user_id: SEED_IDS.userGuru2,
       nip: '19910823201802',
       name: 'Siti Aisyah, S.Si.',
+      staff_category: 'pendidik',
       status: 'GTY (Guru Tetap Yayasan)',
       bank_account: 'BSI 7283910492',
       email: 'siti.aisyah@gmail.com',
@@ -118,7 +121,8 @@ async function buildInitialDatabase() {
       user_id: SEED_IDS.userGuru3,
       nip: '19951104202101',
       name: 'Rizky Pratama, S.Kom.',
-      status: 'GTT (Guru Tidak Tetap)',
+      staff_category: 'kependidikan',
+      status: 'Laboran & Teknisi Sumber Belajar',
       bank_account: 'Mandiri 137001928371',
       email: 'rizky.pratama@gmail.com',
     },
@@ -314,6 +318,7 @@ async function buildInitialDatabase() {
       details_json: JSON.stringify({
         teacher_name: teacher.name,
         nip: teacher.nip,
+        staff_category: resolveStaffCategory(teacher),
         status: teacher.status,
         bank_account: teacher.bank_account,
         month: att.month,
@@ -410,6 +415,10 @@ function upgradeLegacyDbToGmail(db) {
 
   if (Array.isArray(db.Teachers)) {
     db.Teachers.forEach((t) => {
+      if (!t.staff_category) {
+        t.staff_category = resolveStaffCategory(t);
+        modified = true;
+      }
       if (!t.email) {
         const linkedUser = db.Users_Auth.find((u) => u.id === t.user_id);
         if (linkedUser) {
@@ -871,6 +880,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         user_id: userId,
         nip: payload.nip,
         name: payload.name,
+        staff_category: resolveStaffCategory(payload),
         status: payload.status || 'GTY (Guru Tetap Yayasan)',
         bank_account: payload.bank_account,
         email: cleanEmail,
@@ -953,6 +963,10 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         ...existingTeacher,
         nip: payload.nip ?? existingTeacher.nip,
         name: payload.name ?? existingTeacher.name,
+        staff_category:
+          payload.staff_category !== undefined
+            ? resolveStaffCategory(payload)
+            : existingTeacher.staff_category || resolveStaffCategory(existingTeacher),
         status: payload.status ?? existingTeacher.status,
         bank_account: payload.bank_account ?? existingTeacher.bank_account,
         email: nextEmail,
@@ -1040,6 +1054,10 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             ...existingTeacher,
             nip: cleanNip,
             name: cleanName,
+            staff_category: resolveStaffCategory({
+              staff_category: item.staff_category,
+              status: item.status || existingTeacher.status,
+            }),
             status: item.status || existingTeacher.status,
             bank_account: cleanBank,
             email: updatedEmail,
@@ -1096,6 +1114,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             user_id: userId,
             nip: cleanNip,
             name: cleanName,
+            staff_category: resolveStaffCategory(item),
             status: item.status || 'GTY (Guru Tetap Yayasan)',
             bank_account: cleanBank,
             email: cleanEmail,
@@ -1616,6 +1635,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           details_json: JSON.stringify({
             teacher_name: teacher.name,
             nip: teacher.nip,
+            staff_category: resolveStaffCategory(teacher),
             status: teacher.status,
             bank_account: teacher.bank_account,
             month: storedMonth,

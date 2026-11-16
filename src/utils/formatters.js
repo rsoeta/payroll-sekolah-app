@@ -235,6 +235,70 @@ export function resolveInfaqZakatAmount(record = {}) {
   return Math.max(0, Number(record.bpjs_deduction || 0));
 }
 
+export const STAFF_CATEGORIES = [
+  {
+    id: 'pendidik',
+    label: 'Tenaga Pendidik',
+    description: 'Guru mata pelajaran, wali kelas, dan tenaga pengajar.',
+    statusOptions: [
+      'GTY (Guru Tetap Yayasan)',
+      'GTT (Guru Tidak Tetap)',
+      'PNS DPK',
+    ],
+  },
+  {
+    id: 'kependidikan',
+    label: 'Tenaga Kependidikan',
+    description:
+      'Staf Tata Usaha (TU), Pustakawan, Laboran & Teknisi Sumber Belajar, Penguji, Petugas Keamanan, Tenaga Kebersihan.',
+    statusOptions: [
+      'Staf Tata Usaha (TU)',
+      'Pustakawan',
+      'Laboran & Teknisi Sumber Belajar',
+      'Penguji',
+      'Petugas Keamanan',
+      'Tenaga Kebersihan',
+    ],
+  },
+];
+
+/**
+ * Resolves PTK category ('pendidik' | 'kependidikan') from an explicit `staff_category` field
+ * or by inspecting the employee's `status` title.
+ */
+export function resolveStaffCategory(recordOrStatus, fallbackStatus = '') {
+  if (recordOrStatus && typeof recordOrStatus === 'object') {
+    const rawCat = String(recordOrStatus.staff_category || '')
+      .trim()
+      .toLowerCase();
+    if (rawCat === 'kependidikan' || rawCat === 'tenaga kependidikan') return 'kependidikan';
+    if (rawCat === 'pendidik' || rawCat === 'tenaga pendidik' || rawCat === 'guru') {
+      return 'pendidik';
+    }
+    return resolveStaffCategory(recordOrStatus.status || fallbackStatus);
+  }
+  const clean = String(recordOrStatus || fallbackStatus || '')
+    .trim()
+    .toLowerCase();
+  if (
+    /kependidikan|tata\s*usaha|\btu\b|pustakawan|laboran|teknisi|penguji|keamanan|satpam|security|kebersihan|cleaning|staf/.test(
+      clean
+    )
+  ) {
+    return 'kependidikan';
+  }
+  return 'pendidik';
+}
+
+export function getStaffCategoryLabel(categoryOrRecord) {
+  const cat =
+    typeof categoryOrRecord === 'string' &&
+    (categoryOrRecord === 'pendidik' || categoryOrRecord === 'kependidikan')
+      ? categoryOrRecord
+      : resolveStaffCategory(categoryOrRecord);
+  return cat === 'kependidikan' ? 'Tenaga Kependidikan' : 'Tenaga Pendidik';
+}
+
 /**
  * Client-side Anti-XSS input sanitizer.
  */

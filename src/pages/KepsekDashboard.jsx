@@ -15,9 +15,11 @@ import notify from '../utils/notify';
 import {
   formatRupiah,
   formatRibuan,
+  getStaffCategoryLabel,
   parseCustomComponents,
   getMonthName,
   resolveInfaqZakatAmount,
+  resolveStaffCategory,
 } from '../utils/formatters';
 import ConfirmModal from '../components/ConfirmModal';
 import FloatingTabBar from '../components/FloatingTabBar';
@@ -362,7 +364,7 @@ export function KepsekDashboard({
           >
             <div>
               <h3 className="text-base font-bold text-[var(--ink)]">
-                Audit Rincian Gaji Pendidik — {getMonthName(selectedPayroll.month)}{' '}
+                Audit Rincian Gaji PTK — {getMonthName(selectedPayroll.month)}{' '}
                 {selectedPayroll.year}
               </h3>
               <p className="text-xs text-[var(--muted)]">
@@ -394,6 +396,17 @@ export function KepsekDashboard({
                 <div key={row.id} className="fluid-item nim-card-well p-4 space-y-2.5">
                   <div className="flex items-start justify-between">
                     <div>
+                      <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
+                        <span
+                          className={`nim-badge !text-[10px] ${
+                            resolveStaffCategory(d) === 'kependidikan'
+                              ? 'nim-badge--warn'
+                              : 'nim-badge--good'
+                          }`}
+                        >
+                          {getStaffCategoryLabel(d)}
+                        </span>
+                      </div>
                       <p className="font-bold text-[var(--ink)]">{d.teacher_name}</p>
                       <p className="text-xs text-[var(--muted)]">
                         NIP: {d.nip} • Hadir: {d.present_days} hr | JTM: {d.total_jtm} jam

@@ -1,9 +1,11 @@
 import React from 'react';
 import { Mail, Plus, Trash2, X } from 'lucide-react';
 import {
+  STAFF_CATEGORIES,
   formatRibuan,
   formatRupiah,
   parseRibuan,
+  resolveStaffCategory,
   summarizeCustomComponents,
 } from '../utils/formatters';
 
@@ -38,12 +40,27 @@ export function TeacherFormModal({
       customSummary.totalCustomDeduction
   );
 
+  const currentCategory = resolveStaffCategory(teacherForm);
+
+  const handleCategoryChange = (nextCategoryId) => {
+    const categoryMeta =
+      STAFF_CATEGORIES.find((c) => c.id === nextCategoryId) || STAFF_CATEGORIES[0];
+    const currentStatusInTarget = categoryMeta.statusOptions.includes(teacherForm.status);
+    setTeacherForm({
+      ...teacherForm,
+      staff_category: nextCategoryId,
+      status: currentStatusInTarget ? teacherForm.status : categoryMeta.statusOptions[0],
+    });
+  };
+
   return (
     <div
       className="nim-backdrop"
       role="dialog"
       aria-modal="true"
-      aria-label={isEditing ? 'Edit Data Guru & Komponen Gaji' : 'Tambah Guru & Komponen Gaji'}
+      aria-label={
+        isEditing ? 'Edit Data PTK & Komponen Gaji' : 'Tambah PTK & Komponen Gaji'
+      }
     >
       <div className="nim-panel nim-modal w-full max-w-5xl p-4 sm:p-5 my-auto max-h-[92vh] overflow-y-auto">
         {/* Compact Modal Header */}
@@ -54,17 +71,18 @@ export function TeacherFormModal({
           <div>
             <h3 className="text-base sm:text-lg font-bold text-[var(--ink)]">
               {isEditing
-                ? 'Edit Data Guru & Komponen Gaji'
-                : 'Tambah Guru & Komponen Gaji'}
+                ? 'Edit Data PTK & Komponen Gaji'
+                : 'Tambah PTK & Komponen Gaji'}
             </h3>
             <p className="text-[11px] text-[var(--muted)]">
-              Lengkapi profil pendidik, akses Gmail portal, serta rincian gaji dan potongan.
+              Formulir terpadu bagi Tenaga Pendidik (Guru) &amp; Tenaga Kependidikan (TU,
+              Pustakawan, Laboran, Penguji, Keamanan, Kebersihan).
             </p>
           </div>
           <button
             type="button"
             onClick={onClose}
-            aria-label="Tutup formulir guru"
+            aria-label="Tutup formulir PTK"
             className="nim-ibtn"
           >
             <X className="h-4 w-4" />
@@ -77,7 +95,47 @@ export function TeacherFormModal({
             <div className="lg:col-span-6 space-y-3">
               {/* Identity & Gmail Card */}
               <div className="nim-card-well p-3.5 space-y-2.5">
-                <p className="nim-kpi__label">Identitas &amp; Akses Portal</p>
+                <p className="nim-kpi__label">Identitas, Kategori &amp; Akses Portal</p>
+
+                {/* Radio Button Status Kategori: Tenaga Pendidik vs Tenaga Kependidikan */}
+                <div>
+                  <span className="block text-[11.5px] font-semibold text-[var(--ink-2)] mb-1">
+                    Kategori PTK
+                  </span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {STAFF_CATEGORIES.map((cat) => {
+                      const isSelected = currentCategory === cat.id;
+                      return (
+                        <label
+                          key={cat.id}
+                          className={`flex items-start gap-2 rounded-xl border px-2.5 py-2 cursor-pointer transition-all ${
+                            isSelected
+                              ? 'border-emerald-500 bg-emerald-50/70 shadow-2xs'
+                              : 'border-[var(--line)] bg-[var(--surface)] hover:border-slate-300'
+                          }`}
+                        >
+                          <input
+                            type="radio"
+                            name="staff_category"
+                            value={cat.id}
+                            checked={isSelected}
+                            onChange={() => handleCategoryChange(cat.id)}
+                            className="mt-0.5 h-3.5 w-3.5 accent-emerald-600 shrink-0"
+                          />
+                          <div className="min-w-0">
+                            <span className="block text-xs font-bold text-[var(--ink)]">
+                              {cat.label}
+                            </span>
+                            <span className="block text-[10px] leading-tight text-[var(--muted)] line-clamp-2">
+                              {cat.description}
+                            </span>
+                          </div>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                   <div>
                     <label className="block text-[11.5px] font-semibold text-[var(--ink-2)]">
@@ -107,17 +165,22 @@ export function TeacherFormModal({
                   </div>
                   <div>
                     <label className="block text-[11.5px] font-semibold text-[var(--ink-2)]">
-                      Status Kepegawaian
+                      Status / Jabatan Tugas
                     </label>
                     <select
                       value={teacherForm.status}
                       onChange={(e) => setTeacherForm({ ...teacherForm, status: e.target.value })}
                       className="nim-select mt-1 !min-h-[34px] !py-1.5 text-xs"
                     >
-                      <option value="GTY (Guru Tetap Yayasan)">GTY (Guru Tetap Yayasan)</option>
-                      <option value="GTT (Guru Tidak Tetap)">GTT (Guru Tidak Tetap)</option>
-                      <option value="PNS DPK">PNS DPK</option>
-                      <option value="Staf Tata Usaha">Staf Tata Usaha</option>
+                      {STAFF_CATEGORIES.map((cat) => (
+                        <optgroup key={cat.id} label={cat.label}>
+                          {cat.statusOptions.map((opt) => (
+                            <option key={opt} value={opt}>
+                              {opt}
+                            </option>
+                          ))}
+                        </optgroup>
+                      ))}
                     </select>
                   </div>
                   <div>
@@ -418,7 +481,8 @@ export function TeacherFormModal({
             style={{ borderTop: '1px solid var(--line)' }}
           >
             <p className="text-[11px] text-[var(--muted)]">
-              Guru otomatis masuk menggunakan alamat Gmail portal tanpa username &amp; password.
+              Tenaga Pendidik maupun Tenaga Kependidikan masuk portal via alamat Gmail tanpa
+              username &amp; password.
             </p>
             <div className="flex items-center gap-2 ml-auto">
               <button

@@ -26,9 +26,11 @@ import notify from '../utils/notify';
 import {
   formatRupiah,
   formatRibuan,
+  getStaffCategoryLabel,
   isInfaqZakatEnabled,
   parseCustomComponents,
   resolveInfaqZakatAmount,
+  resolveStaffCategory,
   MONTHS_ID,
   getMonthName,
   normalizePeriodKey,
@@ -73,8 +75,8 @@ const TAB_HEADER_META = {
   },
   teachers: {
     eyebrow: 'Basis Data Kepegawaian',
-    title: 'Master Data Guru & Komponen Gaji',
-    desc: 'Kelola profil pendidik, komponen gaji, akun Gmail portal, serta import massal Excel.',
+    title: 'Master Data PTK & Komponen Gaji',
+    desc: 'Satu formulir penggajian untuk Tenaga Pendidik (Guru) & Tenaga Kependidikan (TU, Pustakawan, Laboran, Penguji, Keamanan, Kebersihan).',
   },
   school_profile: {
     eyebrow: 'Identitas Dokumen & Portal',
@@ -87,6 +89,7 @@ const INITIAL_TEACHER_FORM = {
   id: '',
   nip: '',
   name: '',
+  staff_category: 'pendidik',
   status: 'GTY (Guru Tetap Yayasan)',
   bank_account: '',
   email: '',
@@ -211,6 +214,7 @@ export function AdminDashboard({
       id: teacher.id,
       nip: teacher.nip || '',
       name: teacher.name || '',
+      staff_category: resolveStaffCategory(teacher),
       status: teacher.status || 'GTY (Guru Tetap Yayasan)',
       bank_account: teacher.bank_account || '',
       email: teacher.email || '',
@@ -330,6 +334,7 @@ export function AdminDashboard({
 
     const submitPayload = {
       ...teacherForm,
+      staff_category: resolveStaffCategory(teacherForm),
       email: cleanEmail,
       username: cleanEmail,
       infaq_zakat_enabled: isInfaqEnabled,
@@ -341,10 +346,10 @@ export function AdminDashboard({
     try {
       if (isEditingTeacher) {
         await api.put('teachers.update', submitPayload);
-        notify.success('Data Guru & Komponen Gaji diperbarui.');
+        notify.success('Data PTK & Komponen Gaji diperbarui.');
       } else {
         await api.post('teachers.create', submitPayload);
-        notify.success('Guru baru & Komponen Gaji berhasil ditambahkan.');
+        notify.success('Data PTK baru & Komponen Gaji berhasil ditambahkan.');
       }
       setTeacherModalOpen(false);
       loadAllData();
@@ -530,13 +535,13 @@ export function AdminDashboard({
       <section className="flex flex-nowrap items-stretch gap-2 sm:gap-4 w-full">
         <div className="flex-1 basis-0 nim-glass nim-kpi">
           <div className="flex items-start justify-between gap-2">
-            <span className="nim-kpi__label">Total Pendidik Aktif</span>
+            <span className="nim-kpi__label">Total PTK Aktif</span>
             <span className="nim-kpi__ico !w-7 !h-7 sm:!w-9 sm:!h-9">
               <Users className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </span>
           </div>
-          <p className="nim-kpi__value mt-2 truncate">{formatRibuan(teachers.length)} Guru</p>
-          <p className="nim-kpi__sub mt-1 truncate">Pendidik &amp; Staf Yayasan</p>
+          <p className="nim-kpi__value mt-2 truncate">{formatRibuan(teachers.length)} PTK</p>
+          <p className="nim-kpi__sub mt-1 truncate">Pendidik &amp; Tenaga Kependidikan</p>
         </div>
 
         <div className="flex-1 basis-0 nim-glass nim-kpi">
@@ -595,7 +600,7 @@ export function AdminDashboard({
             {[
               { id: 'payroll', label: 'Alur Penggajian', icon: Wallet },
               { id: 'attendance', label: 'Kehadiran & JTM', icon: CalendarCheck },
-              { id: 'teachers', label: 'Master Guru', icon: Users },
+              { id: 'teachers', label: 'Master PTK & Gaji', icon: Users },
               { id: 'school_profile', label: 'Profil Sekolah', icon: Building2 },
             ].map((tabItem) => {
               const TabIcon = tabItem.icon;
@@ -861,7 +866,7 @@ export function AdminDashboard({
                             className="nim-btn flex-1"
                           >
                             <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
-                            <span>Rincian Guru</span>
+                            <span>Rincian Slip</span>
                           </button>
 
                           {pr.status === 'draft' && (
@@ -907,144 +912,228 @@ export function AdminDashboard({
                 </div>
               </div>
 
-              {/* Selected Payroll Details Breakdown */}
-              {selectedPayroll && (
-                <div className="nim-glass nim-card space-y-4">
-                  <div
-                    className="flex flex-wrap items-center justify-between gap-2 pb-3"
-                    style={{ borderBottom: '1px solid var(--line)' }}
-                  >
-                    <div>
-                      <h4 className="text-base font-bold text-[var(--ink)]">
-                        Rincian Slip Gaji Guru — {getMonthName(selectedPayroll.month)}{' '}
-                        {selectedPayroll.year}
-                      </h4>
-                      <p className="text-xs text-[var(--muted)]">
-                        Total Anggaran:{' '}
-                        <strong className="text-[var(--ink)]">
-                          {formatRupiah(selectedPayroll.total_budget)}
-                        </strong>
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedPayroll(null)}
-                      aria-label="Tutup rincian"
-                      className="nim-ibtn"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  <div className="fluid-container">
-                    {payrollDetails.map((detail) => {
-                      let parsed = {};
-                      try {
-                        parsed = JSON.parse(detail.details_json || '{}');
-                      } catch {
-                        parsed = {};
+              {/* Selected Payroll Details Breakdown — Dipisah menjadi 2 Card: Tenaga Pendidik & Tenaga Kependidikan */}
+              {selectedPayroll &&
+                (() => {
+                  const enrichedDetails = payrollDetails.map((detail) => {
+                    let parsed = {};
+                    try {
+                      parsed = JSON.parse(detail.details_json || '{}');
+                    } catch {
+                      parsed = {};
+                    }
+                    const linkedTeacher = teachers.find((t) => t.id === detail.teacher_id);
+                    const staffCategory = resolveStaffCategory(
+                      {
+                        staff_category: parsed.staff_category || linkedTeacher?.staff_category,
+                        status: parsed.status || linkedTeacher?.status,
                       }
-                      return (
-                        <div key={detail.id} className="fluid-item nim-card-well p-4 space-y-2.5">
-                          <div className="flex items-start justify-between gap-2">
-                            <div>
-                              <p className="font-bold text-[var(--ink)]">{parsed.teacher_name}</p>
-                              <p className="text-xs text-[var(--muted)]">
-                                NIP: {parsed.nip} • {parsed.bank_account}
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => downloadPayslipPdf(detail)}
-                              className="nim-btn !min-h-[32px] !px-2.5 text-xs"
-                              style={{
-                                background: 'var(--accent-soft)',
-                                color: 'var(--accent-text)',
-                              }}
+                    );
+                    return { detail, parsed, staffCategory };
+                  });
+
+                  const groups = [
+                    {
+                      id: 'pendidik',
+                      title: `Rincian Slip Gaji Tenaga Pendidik (Guru) — ${getMonthName(
+                        selectedPayroll.month
+                      )} ${selectedPayroll.year}`,
+                      subtitle: 'Tenaga Pendidik (Guru Mata Pelajaran, Wali Kelas, Pengajar)',
+                      emptyText: 'Belum ada data Tenaga Pendidik pada periode penggajian ini.',
+                      items: enrichedDetails.filter((x) => x.staffCategory === 'pendidik'),
+                      showCloseButton: true,
+                    },
+                    {
+                      id: 'kependidikan',
+                      title: `Rincian Slip Gaji Tenaga Kependidikan — ${getMonthName(
+                        selectedPayroll.month
+                      )} ${selectedPayroll.year}`,
+                      subtitle:
+                        'Staf TU, Pustakawan, Laboran & Teknisi Sumber Belajar, Penguji, Petugas Keamanan, Tenaga Kebersihan',
+                      emptyText:
+                        'Belum ada pegawai berstatus Tenaga Kependidikan pada periode ini. Atur kategori pada menu Master PTK & Gaji.',
+                      items: enrichedDetails.filter((x) => x.staffCategory === 'kependidikan'),
+                      showCloseButton: false,
+                    },
+                  ];
+
+                  return (
+                    <div className="space-y-4">
+                      {groups.map((grp) => {
+                        const groupBudget = grp.items.reduce(
+                          (acc, x) => acc + Number(x.detail.net_salary || 0),
+                          0
+                        );
+                        return (
+                          <div key={grp.id} className="nim-glass nim-card space-y-4">
+                            <div
+                              className="flex flex-wrap items-center justify-between gap-2 pb-3"
+                              style={{ borderBottom: '1px solid var(--line)' }}
                             >
-                              <FileDown className="h-3.5 w-3.5" />
-                              <span>PDF</span>
-                            </button>
-                          </div>
-
-                          <div
-                            className="grid grid-cols-2 gap-1.5 text-xs text-[var(--muted)] pt-2"
-                            style={{ borderTop: '1px solid var(--line)' }}
-                          >
-                            <span>Gaji Pokok:</span>
-                            <span className="text-right font-semibold text-[var(--ink)] tabular-nums">
-                              {formatRupiah(parsed.base_salary)}
-                            </span>
-                            <span>
-                              Honor JTM ({parsed.total_jtm} × {formatRupiah(parsed.hourly_rate)}):
-                            </span>
-                            <span className="text-right font-semibold text-[var(--ink)] tabular-nums">
-                              {formatRupiah(parsed.jtm_honor)}
-                            </span>
-                            <span>Tunjangan Jabatan:</span>
-                            <span className="text-right font-semibold text-[var(--ink)] tabular-nums">
-                              {formatRupiah(parsed.position_allowance)}
-                            </span>
-                            {parseCustomComponents(parsed.custom_components).map((cust) => (
-                              <React.Fragment key={cust.id}>
-                                <span>
-                                  {cust.type === 'allowance'
-                                    ? `+ ${cust.label}:`
-                                    : `- ${cust.label}:`}
-                                </span>
-                                <span
-                                  className="text-right font-semibold tabular-nums"
-                                  style={{
-                                    color:
-                                      cust.type === 'allowance'
-                                        ? 'var(--good-text)'
-                                        : 'var(--bad-text)',
-                                  }}
-                                >
-                                  {cust.type === 'allowance'
-                                    ? `+ ${formatRupiah(cust.amount)}`
-                                    : `- ${formatRupiah(cust.amount)}`}
-                                </span>
-                              </React.Fragment>
-                            ))}
-                            {(() => {
-                              const infaqZakat = resolveInfaqZakatAmount(parsed);
-                              return (
-                                <>
-                                  <span>Infaq / Zakat Profesi (2,5%):</span>
+                              <div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <h4 className="text-base font-bold text-[var(--ink)]">
+                                    {grp.title}
+                                  </h4>
                                   <span
-                                    className="text-right font-semibold tabular-nums"
-                                    style={{
-                                      color:
-                                        infaqZakat > 0 ? 'var(--bad-text)' : 'var(--muted)',
-                                    }}
+                                    className={`nim-badge ${
+                                      grp.id === 'kependidikan'
+                                        ? 'nim-badge--warn'
+                                        : 'nim-badge--accent'
+                                    }`}
                                   >
-                                    {infaqZakat > 0
-                                      ? `- ${formatRupiah(infaqZakat)}`
-                                      : 'Tidak Aktif (Rp 0)'}
+                                    {formatRibuan(grp.items.length)} Orang
                                   </span>
-                                </>
-                              );
-                            })()}
-                          </div>
+                                </div>
+                                <p className="mt-0.5 text-xs text-[var(--muted)]">
+                                  {grp.subtitle} • Subtotal:{' '}
+                                  <strong className="text-[var(--ink)] tabular-nums">
+                                    {formatRupiah(groupBudget)}
+                                  </strong>{' '}
+                                  (Total Anggaran Keseluruhan:{' '}
+                                  <strong className="text-[var(--ink)] tabular-nums">
+                                    {formatRupiah(selectedPayroll.total_budget)}
+                                  </strong>
+                                  )
+                                </p>
+                              </div>
+                              {grp.showCloseButton && (
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedPayroll(null)}
+                                  aria-label="Tutup rincian"
+                                  className="nim-ibtn"
+                                >
+                                  <X className="h-4 w-4" />
+                                </button>
+                              )}
+                            </div>
 
-                          <div
-                            className="flex items-center justify-between pt-2"
-                            style={{ borderTop: '1px solid var(--line)' }}
-                          >
-                            <span className="text-xs font-bold uppercase text-[var(--ink-2)]">
-                              Gaji Bersih (Net):
-                            </span>
-                            <span className="text-base font-bold text-[var(--accent-text)] tabular-nums">
-                              {formatRupiah(detail.net_salary)}
-                            </span>
+                            {grp.items.length === 0 ? (
+                              <div
+                                className="nim-card-well p-4 text-center text-xs text-[var(--muted)]"
+                                style={{ border: '1px dashed var(--line-2)' }}
+                              >
+                                {grp.emptyText}
+                              </div>
+                            ) : (
+                              <div className="fluid-container">
+                                {grp.items.map(({ detail, parsed }) => (
+                                  <div
+                                    key={detail.id}
+                                    className="fluid-item nim-card-well p-4 space-y-2.5"
+                                  >
+                                    <div className="flex items-start justify-between gap-2">
+                                      <div>
+                                        <p className="font-bold text-[var(--ink)]">
+                                          {parsed.teacher_name}
+                                        </p>
+                                        <p className="text-xs text-[var(--muted)]">
+                                          NIP: {parsed.nip} • {parsed.status} •{' '}
+                                          {parsed.bank_account}
+                                        </p>
+                                      </div>
+                                      <button
+                                        type="button"
+                                        onClick={() => downloadPayslipPdf(detail)}
+                                        className="nim-btn !min-h-[32px] !px-2.5 text-xs shrink-0"
+                                        style={{
+                                          background: 'var(--accent-soft)',
+                                          color: 'var(--accent-text)',
+                                        }}
+                                      >
+                                        <FileDown className="h-3.5 w-3.5" />
+                                        <span>PDF</span>
+                                      </button>
+                                    </div>
+
+                                    <div
+                                      className="grid grid-cols-2 gap-1.5 text-xs text-[var(--muted)] pt-2"
+                                      style={{ borderTop: '1px solid var(--line)' }}
+                                    >
+                                      <span>Gaji Pokok:</span>
+                                      <span className="text-right font-semibold text-[var(--ink)] tabular-nums">
+                                        {formatRupiah(parsed.base_salary)}
+                                      </span>
+                                      <span>
+                                        Honor JTM ({parsed.total_jtm} ×{' '}
+                                        {formatRupiah(parsed.hourly_rate)}):
+                                      </span>
+                                      <span className="text-right font-semibold text-[var(--ink)] tabular-nums">
+                                        {formatRupiah(parsed.jtm_honor)}
+                                      </span>
+                                      <span>Tunjangan Jabatan:</span>
+                                      <span className="text-right font-semibold text-[var(--ink)] tabular-nums">
+                                        {formatRupiah(parsed.position_allowance)}
+                                      </span>
+                                      {parseCustomComponents(parsed.custom_components).map(
+                                        (cust) => (
+                                          <React.Fragment key={cust.id}>
+                                            <span>
+                                              {cust.type === 'allowance'
+                                                ? `+ ${cust.label}:`
+                                                : `- ${cust.label}:`}
+                                            </span>
+                                            <span
+                                              className="text-right font-semibold tabular-nums"
+                                              style={{
+                                                color:
+                                                  cust.type === 'allowance'
+                                                    ? 'var(--good-text)'
+                                                    : 'var(--bad-text)',
+                                              }}
+                                            >
+                                              {cust.type === 'allowance'
+                                                ? `+ ${formatRupiah(cust.amount)}`
+                                                : `- ${formatRupiah(cust.amount)}`}
+                                            </span>
+                                          </React.Fragment>
+                                        )
+                                      )}
+                                      {(() => {
+                                        const infaqZakat = resolveInfaqZakatAmount(parsed);
+                                        return (
+                                          <>
+                                            <span>Infaq / Zakat Profesi (2,5%):</span>
+                                            <span
+                                              className="text-right font-semibold tabular-nums"
+                                              style={{
+                                                color:
+                                                  infaqZakat > 0
+                                                    ? 'var(--bad-text)'
+                                                    : 'var(--muted)',
+                                              }}
+                                            >
+                                              {infaqZakat > 0
+                                                ? `- ${formatRupiah(infaqZakat)}`
+                                                : 'Tidak Aktif (Rp 0)'}
+                                            </span>
+                                          </>
+                                        );
+                                      })()}
+                                    </div>
+
+                                    <div
+                                      className="flex items-center justify-between pt-2"
+                                      style={{ borderTop: '1px solid var(--line)' }}
+                                    >
+                                      <span className="text-xs font-bold uppercase text-[var(--ink-2)]">
+                                        Gaji Bersih (Net):
+                                      </span>
+                                      <span className="text-base font-bold text-[var(--accent-text)] tabular-nums">
+                                        {formatRupiah(detail.net_salary)}
+                                      </span>
+                                    </div>
+                                  </div>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
             </section>
           )}
 
@@ -1332,17 +1421,17 @@ export function AdminDashboard({
             </section>
           )}
 
-          {/* TAB 3: MASTER DATA GURU & KOMPONEN GAJI */}
+          {/* TAB 3: MASTER DATA PTK & KOMPONEN GAJI */}
           {activeTab === 'teachers' && (
             <section className="space-y-4">
               <div className="nim-glass nim-card flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <h2 className="text-base sm:text-lg font-bold text-[var(--ink)]">
-                    Master Data Guru &amp; Komponen Gaji
+                    Master Data PTK &amp; Komponen Gaji
                   </h2>
                   <p className="text-xs text-[var(--muted)]">
-                    Kelola data profil pendidik, rekening bank, rincian gaji, serta akun akses
-                    portal.
+                    Kelola profil Tenaga Pendidik (Guru) &amp; Tenaga Kependidikan, rekening bank,
+                    rincian gaji, serta akun Gmail portal.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -1378,7 +1467,7 @@ export function AdminDashboard({
                     className="nim-btn nim-btn--primary"
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    <span>Tambah Guru Baru</span>
+                    <span>Tambah Data PTK Baru</span>
                   </button>
                 </div>
               </div>
@@ -1386,6 +1475,8 @@ export function AdminDashboard({
               <div className="fluid-container">
                 {teachers.map((t) => {
                   const comp = t.salary_component || {};
+                  const catId = resolveStaffCategory(t);
+                  const catLabel = getStaffCategoryLabel(catId);
                   return (
                     <div
                       key={t.id}
@@ -1394,6 +1485,17 @@ export function AdminDashboard({
                       <div>
                         <div className="flex items-start justify-between gap-2">
                           <div>
+                            <div className="flex flex-wrap items-center gap-1.5 mb-1">
+                              <span
+                                className={`nim-badge !text-[10.5px] ${
+                                  catId === 'kependidikan'
+                                    ? 'nim-badge--warn'
+                                    : 'nim-badge--good'
+                                }`}
+                              >
+                                {catLabel}
+                              </span>
+                            </div>
                             <h3 className="text-base font-bold text-[var(--ink)]">{t.name}</h3>
                             <p className="text-xs text-[var(--muted)]">
                               NIP: {t.nip} • {t.status}
@@ -1544,7 +1646,7 @@ export function AdminDashboard({
         tabs={[
           { id: 'payroll', label: 'Penggajian', icon: Wallet },
           { id: 'attendance', label: 'Kehadiran & JTM', icon: CalendarCheck },
-          { id: 'teachers', label: 'Master Guru', icon: Users, badge: teachers.length },
+          { id: 'teachers', label: 'Master PTK', icon: Users, badge: teachers.length },
           { id: 'school_profile', label: 'Profil Sekolah', icon: Building2 },
         ]}
       />
