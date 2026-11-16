@@ -142,6 +142,7 @@ export function AppShell({
     applyRail(!railCollapsed);
   };
 
+  const isAdmin = user?.role === 'admin';
   const roleMeta = user ? ROLE_META[user.role] || ROLE_META.guru : null;
   const activeNav = navItems.find((item) => item.id === activeTab) || navItems[0];
   const shortBrand = schoolProfile.app_short_name || 'SIPAYROLL';
@@ -387,15 +388,17 @@ export function AppShell({
                   )}
                 </button>
 
-                <button
-                  type="button"
-                  onClick={() => setConfigOpen(true)}
-                  title="Pengaturan Koneksi Server"
-                  aria-label="Pengaturan Koneksi Server"
-                  className="nim-ibtn"
-                >
-                  <Settings className="h-4 w-4" />
-                </button>
+                {isAdmin && (
+                  <button
+                    type="button"
+                    onClick={() => setConfigOpen(true)}
+                    title="Pengaturan Koneksi Server"
+                    aria-label="Pengaturan Koneksi Server"
+                    className="nim-ibtn"
+                  >
+                    <Settings className="h-4 w-4" />
+                  </button>
+                )}
 
                 {user && (
                   <button
@@ -526,18 +529,20 @@ export function AppShell({
           onNavigate={onTabChange}
           themePref={themePref}
           onThemeChange={applyTheme}
-          onOpenSettings={() => setConfigOpen(true)}
+          onOpenSettings={isAdmin ? () => setConfigOpen(true) : undefined}
           onToggleRail={handleToggleRail}
           onLogout={onLogout}
         />
       )}
 
       {/* Server Config & PWA Guide Modals */}
-      <ServerConfigModal
-        isOpen={configOpen}
-        onClose={() => setConfigOpen(false)}
-        onDataRefresh={onDataRefresh}
-      />
+      {isAdmin && (
+        <ServerConfigModal
+          isOpen={configOpen}
+          onClose={() => setConfigOpen(false)}
+          onDataRefresh={onDataRefresh}
+        />
+      )}
       <PwaGuideModal
         isOpen={pwaGuideOpen}
         onClose={() => setPwaGuideOpen(false)}

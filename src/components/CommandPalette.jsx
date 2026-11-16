@@ -122,17 +122,21 @@ export function CommandPalette({
           onClose();
         },
       },
-      {
-        id: 'act:settings',
-        group: 'Tampilan & Aksi',
-        title: 'Pengaturan Koneksi Server',
-        sub: 'Konfigurasi URL GAS atau reset simulasi',
-        icon: Settings,
-        run: () => {
-          onClose();
-          onOpenSettings?.();
-        },
-      },
+      ...(typeof onOpenSettings === 'function'
+        ? [
+            {
+              id: 'act:settings',
+              group: 'Tampilan & Aksi',
+              title: 'Pengaturan Koneksi Server',
+              sub: 'Konfigurasi URL GAS atau reset simulasi',
+              icon: Settings,
+              run: () => {
+                onClose();
+                onOpenSettings();
+              },
+            },
+          ]
+        : []),
       {
         id: 'act:logout',
         group: 'Tampilan & Aksi',
