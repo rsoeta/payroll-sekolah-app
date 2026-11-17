@@ -873,12 +873,13 @@ export function AdminDashboard({
                           boxShadow: 'inset 0 0 0 1px var(--line-2)',
                         }}
                       >
-                        Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan − Infaq / Zakat Profesi
-                        2,5% (opsional)
+                        Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan + Tunj (+) − Infaq / Zakat
+                        Profesi 2,5% (opsional)
                       </code>
                       <span className="mt-1 block text-[11px] text-[var(--muted)]">
                         Infaq / Zakat Profesi = 2,5% × [Gaji Pokok + (JTM × Tarif) + Tunjangan
-                        Jabatan], otomatis dipotong saat kalkulasi bagi guru yang mengaktifkan opsi.
+                        Jabatan + Tunjangan Custom (Tunj +)], otomatis dipotong saat kalkulasi bagi
+                        PTK yang mengaktifkan opsi.
                       </span>
                     </p>
                   </div>

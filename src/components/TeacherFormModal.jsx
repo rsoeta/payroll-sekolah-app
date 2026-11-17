@@ -319,9 +319,11 @@ export function TeacherFormModal({
                   </div>
                 </div>
                 <p className="text-[10.5px] text-[var(--muted)] leading-snug">
-                  Centang bila guru bersedia dipotong <strong>2,5%</strong> dari{' '}
-                  <strong>Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan</strong> pada Menu
-                  Alur Penggajian &amp; Slip Gaji.
+                  Centang bila PTK bersedia dipotong <strong>2,5%</strong> dari{' '}
+                  <strong>
+                    Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan + Tunjangan Custom (Tunj +)
+                  </strong>{' '}
+                  pada Menu Alur Penggajian &amp; Slip Gaji.
                 </p>
               </div>
             </div>

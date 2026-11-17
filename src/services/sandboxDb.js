@@ -302,15 +302,30 @@ async function buildInitialDatabase() {
   // Helper to construct Payroll_Details rows
   const makeDetail = (payrollId, teacher, comp, att) => {
     const jtmHonor = att.total_jtm * comp.hourly_rate;
-    const gross = comp.base_salary + jtmHonor + comp.position_allowance;
+    let customComponents = [];
+    try {
+      customComponents = JSON.parse(comp.custom_components_json || '[]');
+      if (!Array.isArray(customComponents)) customComponents = [];
+    } catch {
+      customComponents = [];
+    }
+    const customAllowanceTotal = customComponents
+      .filter((c) => c.type === 'allowance')
+      .reduce((s, c) => s + Number(c.amount || 0), 0);
+    const customDeductionTotal = customComponents
+      .filter((c) => c.type !== 'allowance')
+      .reduce((s, c) => s + Number(c.amount || 0), 0);
+    const gross =
+      comp.base_salary + jtmHonor + comp.position_allowance + customAllowanceTotal;
     const infaqEnabled = isInfaqZakatEnabled(comp);
     const infaqZakat = calculateInfaqZakat(
       comp.base_salary,
       jtmHonor,
       comp.position_allowance,
-      infaqEnabled
+      infaqEnabled,
+      customAllowanceTotal
     );
-    const net = Math.max(0, gross - infaqZakat);
+    const net = Math.max(0, gross - infaqZakat - customDeductionTotal);
     return {
       id: generateUuidV4(),
       payroll_id: payrollId,
@@ -1755,7 +1770,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           comp.base_salary,
           jtmHonor,
           comp.position_allowance,
-          infaqEnabled
+          infaqEnabled,
+          customAllowanceTotal
         );
 
         const gross =
@@ -1997,7 +2013,13 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             .filter((c) => c.type !== 'allowance')
             .reduce((s, c) => s + Number(c.amount || 0), 0);
           const infaqEnabled = isInfaqZakatEnabled(comp);
-          const infaqZakat = calculateInfaqZakat(baseSalary, jtmHonor, posAllowance, infaqEnabled);
+          const infaqZakat = calculateInfaqZakat(
+            baseSalary,
+            jtmHonor,
+            posAllowance,
+            infaqEnabled,
+            customAllowance
+          );
           const gross = baseSalary + jtmHonor + posAllowance + customAllowance;
           estimatedNet = Math.max(0, gross - infaqZakat - customDeduction);
 
@@ -2207,7 +2229,13 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           .filter((c) => c.type !== 'allowance')
           .reduce((s, c) => s + Number(c.amount || 0), 0);
         const infaqEnabled = isInfaqZakatEnabled(comp);
-        const infaqZakat = calculateInfaqZakat(baseSalary, jtmHonor, posAllowance, infaqEnabled);
+        const infaqZakat = calculateInfaqZakat(
+          baseSalary,
+          jtmHonor,
+          posAllowance,
+          infaqEnabled,
+          customAllowance
+        );
         const gross = baseSalary + jtmHonor + posAllowance + customAllowance;
         estimatedNet = Math.max(0, gross - infaqZakat - customDeduction);
         detailsSnapshot = {
