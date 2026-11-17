@@ -455,10 +455,6 @@ export function LoginPage({ onLoginSuccess }) {
                     )}
                   </button>
 
-                  <div className="flex items-center justify-center gap-1.5 text-[11px] font-medium text-[var(--good-text)]">
-                    <CheckCircle2 className="h-3.5 w-3.5 shrink-0" />
-                    <span>Langsung aktif tanpa pengaturan Client ID tambahan</span>
-                  </div>
                 </form>
               </div>
             ) : (
