@@ -62,6 +62,7 @@ export function AppShell({
   const [unreadCount, setUnreadCount] = useState(0);
   const prevUnreadRef = useRef(0);
   const notifBoxRef = useRef(null);
+  const notifPanelRef = useRef(null);
 
   const [schoolProfile, setSchoolProfile] = useState(() => getSchoolProfile());
   const [themePref, setThemePref] = useState(() => getThemePreference());
@@ -191,13 +192,19 @@ export function AppShell({
   useEffect(() => {
     if (!notifOpen) return undefined;
     const handleOutside = (e) => {
-      if (notifBoxRef.current && !notifBoxRef.current.contains(e.target)) {
-        setNotifOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handleOutside);
-    return () => document.removeEventListener('mousedown', handleOutside);
-  }, [notifOpen]);
+        const inTrigger = notifBoxRef.current && notifBoxRef.current.contains(e.target);
+        const inPanel = notifPanelRef.current && notifPanelRef.current.contains(e.target);
+        if (!inTrigger && !inPanel) {
+          setNotifOpen(false);
+        }
+      };
+      document.addEventListener('mousedown', handleOutside);
+      document.addEventListener('touchstart', handleOutside);
+      return () => {
+        document.removeEventListener('mousedown', handleOutside);
+        document.removeEventListener('touchstart', handleOutside);
+      };
+    }, [notifOpen]);
 
   const handleMarkAllRead = async () => {
     try {
@@ -212,7 +219,7 @@ export function AppShell({
 
   const handleNotificationClick = async (notifItem) => {
     if (!notifItem.is_read) {
-      api.put('notifications.markRead', { id: notifItem.id }).catch(() => {});
+      api.put('notifications.markRead', { id: notifItem.id }).catch(() => { });
       setNotifications((prev) =>
         prev.map((n) => (n.id === notifItem.id ? { ...n, is_read: true } : n))
       );
@@ -488,91 +495,19 @@ export function AppShell({
                       }}
                       title="Notifikasi Aplikasi"
                       aria-label="Notifikasi Aplikasi"
+                      aria-expanded={notifOpen}
                       className="nim-ibtn relative"
                     >
                       <Bell className="h-4 w-4" />
                       {unreadCount > 0 && (
                         <span
-                          className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white shadow-sm"
+                          className="absolute -top-1 -right-1 z-10 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold leading-none text-white shadow-sm"
                           style={{ background: '#ef4444' }}
                         >
                           {unreadCount > 9 ? '9+' : unreadCount}
                         </span>
                       )}
                     </button>
-
-                    {notifOpen && (
-                      <div
-                        className="nim-panel absolute right-0 mt-2 w-[310px] sm:w-[360px] rounded-2xl p-3 shadow-2xl z-50"
-                        style={{
-                          boxShadow:
-                            '0 18px 40px -12px rgba(0, 0, 0, 0.35), inset 0 0 0 1px var(--line-2)',
-                        }}
-                      >
-                        <div
-                          className="flex items-center justify-between gap-2 pb-2 mb-2"
-                          style={{ borderBottom: '1px solid var(--line)' }}
-                        >
-                          <div className="flex items-center gap-1.5">
-                            <Bell className="h-3.5 w-3.5 text-[var(--accent-text)]" />
-                            <span className="text-xs font-bold text-[var(--ink)]">
-                              Notifikasi ({unreadCount} baru)
-                            </span>
-                          </div>
-                          {unreadCount > 0 && (
-                            <button
-                              type="button"
-                              onClick={handleMarkAllRead}
-                              className="nim-btn nim-btn--ghost nim-btn--sm text-[11px]"
-                            >
-                              <CheckCheck className="h-3 w-3" />
-                              <span>Tandai Dibaca</span>
-                            </button>
-                          )}
-                        </div>
-
-                        {notifications.length === 0 ? (
-                          <p className="py-6 text-center text-xs text-[var(--muted)]">
-                            Belum ada notifikasi aktivitas.
-                          </p>
-                        ) : (
-                          <div className="max-h-72 overflow-y-auto space-y-1.5 pr-0.5">
-                            {notifications.map((n) => (
-                              <button
-                                key={n.id}
-                                type="button"
-                                onClick={() => handleNotificationClick(n)}
-                                className="w-full text-left rounded-xl p-2.5 transition-colors"
-                                style={{
-                                  background: n.is_read ? 'transparent' : 'var(--accent-soft)',
-                                  boxShadow: n.is_read
-                                    ? 'inset 0 0 0 1px var(--line)'
-                                    : 'inset 0 0 0 1px var(--accent-glow)',
-                                }}
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <span className="text-xs font-bold text-[var(--ink)] leading-snug">
-                                    {n.title}
-                                  </span>
-                                  {!n.is_read && (
-                                    <span
-                                      className="mt-1 h-2 w-2 rounded-full shrink-0"
-                                      style={{ background: 'var(--accent)' }}
-                                    />
-                                  )}
-                                </div>
-                                <p className="mt-1 text-[11px] text-[var(--ink-2)] leading-relaxed">
-                                  {n.message}
-                                </p>
-                                <span className="mt-1 block text-[10px] text-[var(--muted)]">
-                                  {formatIsoDateTimeIndo(n.created_at)}
-                                </span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </div>
                 )}
 
@@ -607,6 +542,93 @@ export function AppShell({
           <div className="nim-main">{children}</div>
         </div>
       </div>
+
+      {/* Floating Notifications Bubble (Viewport-safe on Mobile & Desktop) */}
+      {user && notifOpen && (
+        <div
+          ref={notifPanelRef}
+          role="dialog"
+          aria-label="Panel Notifikasi Aplikasi"
+          className="nim-panel fixed inset-x-3 top-[calc(70px+env(safe-area-inset-top))] sm:inset-x-auto sm:right-6 sm:top-[78px] sm:w-[360px] max-h-[75dvh] flex flex-col rounded-2xl p-3 shadow-2xl z-50"
+          style={{
+            boxShadow:
+              '0 18px 40px -12px rgba(0, 0, 0, 0.38), inset 0 0 0 1px var(--line-2)',
+          }}
+        >
+          <div
+            className="flex items-center justify-between gap-2 pb-2 mb-2 shrink-0"
+            style={{ borderBottom: '1px solid var(--line)' }}
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <Bell className="h-3.5 w-3.5 text-[var(--accent-text)] shrink-0" />
+              <span className="text-xs font-bold text-[var(--ink)] truncate">
+                Notifikasi ({unreadCount} baru)
+              </span>
+            </div>
+            <div className="flex items-center gap-1 shrink-0">
+              {unreadCount > 0 && (
+                <button
+                  type="button"
+                  onClick={handleMarkAllRead}
+                  className="nim-btn nim-btn--ghost nim-btn--sm text-[11px]"
+                >
+                  <CheckCheck className="h-3 w-3" />
+                  <span>Tandai Dibaca</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setNotifOpen(false)}
+                aria-label="Tutup notifikasi"
+                className="nim-ibtn !text-xs"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {notifications.length === 0 ? (
+            <p className="py-6 text-center text-xs text-[var(--muted)]">
+              Belum ada notifikasi aktivitas.
+            </p>
+          ) : (
+            <div className="overflow-y-auto space-y-1.5 pr-0.5">
+              {notifications.map((n) => (
+                <button
+                  key={n.id}
+                  type="button"
+                  onClick={() => handleNotificationClick(n)}
+                  className="w-full text-left rounded-xl p-2.5 transition-colors"
+                  style={{
+                    background: n.is_read ? 'transparent' : 'var(--accent-soft)',
+                    boxShadow: n.is_read
+                      ? 'inset 0 0 0 1px var(--line)'
+                      : 'inset 0 0 0 1px var(--accent-glow)',
+                  }}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <span className="text-xs font-bold text-[var(--ink)] leading-snug break-words">
+                      {n.title}
+                    </span>
+                    {!n.is_read && (
+                      <span
+                        className="mt-1 h-2 w-2 rounded-full shrink-0"
+                        style={{ background: 'var(--accent)' }}
+                      />
+                    )}
+                  </div>
+                  <p className="mt-1 text-[11px] text-[var(--ink-2)] leading-relaxed break-words">
+                    {n.message}
+                  </p>
+                  <span className="mt-1 block text-[10px] text-[var(--muted)]">
+                    {formatIsoDateTimeIndo(n.created_at)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Mobile Glass Slide-Over Drawer (<= 760px) */}
       {user && mobileMenuOpen && (
