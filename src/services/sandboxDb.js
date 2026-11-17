@@ -1103,16 +1103,29 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           const itemRate = Number(item.hourly_rate || 0);
           const itemAllowance = Number(item.position_allowance || 0);
           const itemInfaqEnabled = isInfaqZakatEnabled(item);
+          const itemCustomJson =
+            item.custom_components_json !== undefined
+              ? typeof item.custom_components_json === 'string'
+                ? item.custom_components_json
+                : JSON.stringify(item.custom_components_json)
+              : Array.isArray(item.custom_components)
+              ? JSON.stringify(item.custom_components)
+              : undefined;
 
           const compIdx = db.Salary_Components.findIndex((c) => c.teacher_id === targetId);
           if (compIdx !== -1) {
+            const prevComp = db.Salary_Components[compIdx];
             db.Salary_Components[compIdx] = {
-              ...db.Salary_Components[compIdx],
+              ...prevComp,
               base_salary: itemBase,
               hourly_rate: itemRate,
               position_allowance: itemAllowance,
               infaq_zakat_enabled: itemInfaqEnabled,
               bpjs_deduction: itemInfaqEnabled ? 1 : 0,
+              custom_components_json:
+                itemCustomJson !== undefined
+                  ? itemCustomJson
+                  : prevComp.custom_components_json || '[]',
             };
           } else {
             db.Salary_Components.push({
@@ -1123,19 +1136,22 @@ export async function executeSandboxRequest(method, action, token, payload = {})
               position_allowance: itemAllowance,
               infaq_zakat_enabled: itemInfaqEnabled,
               bpjs_deduction: itemInfaqEnabled ? 1 : 0,
+              custom_components_json: itemCustomJson !== undefined ? itemCustomJson : '[]',
             });
           }
           updatedCount++;
         } else {
-          const userId = generateUuidV4();
+          let userId = generateUuidV4();
           if (cleanEmail) {
-            const dup = db.Users_Auth.some(
+            const existingUser = db.Users_Auth.find(
               (u) =>
                 String(u.email || u.username || '')
                   .trim()
                   .toLowerCase() === cleanEmail
             );
-            if (!dup) {
+            if (existingUser) {
+              userId = existingUser.id;
+            } else {
               db.Users_Auth.push({
                 id: userId,
                 username: cleanEmail,
@@ -1160,6 +1176,14 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           const itemRate = Number(item.hourly_rate || 0);
           const itemAllowance = Number(item.position_allowance || 0);
           const itemInfaqEnabled = isInfaqZakatEnabled(item);
+          const itemCustomJson =
+            item.custom_components_json !== undefined
+              ? typeof item.custom_components_json === 'string'
+                ? item.custom_components_json
+                : JSON.stringify(item.custom_components_json)
+              : Array.isArray(item.custom_components)
+              ? JSON.stringify(item.custom_components)
+              : '[]';
 
           db.Salary_Components.push({
             id: generateUuidV4(),
@@ -1169,6 +1193,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             position_allowance: itemAllowance,
             infaq_zakat_enabled: itemInfaqEnabled,
             bpjs_deduction: itemInfaqEnabled ? 1 : 0,
+            custom_components_json: itemCustomJson,
           });
           createdCount++;
         }

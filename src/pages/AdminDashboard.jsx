@@ -429,7 +429,7 @@ export function AdminDashboard({
           }
         }
         notify.success(
-          `Import selesai! ${formatRibuan(created)} guru baru, ${formatRibuan(updated)} diperbarui.`
+          `Import selesai! ${formatRibuan(created)} PTK baru, ${formatRibuan(updated)} diperbarui.`
         );
         await loadAllData();
       } else {
@@ -805,9 +805,8 @@ export function AdminDashboard({
               <button
                 type="button"
                 onClick={() => setEndMonth(startMonth)}
-                className={`nim-btn nim-btn--sm text-[11px] ${
-                  !periodInfo.isRange ? 'nim-btn--primary' : ''
-                }`}
+                className={`nim-btn nim-btn--sm text-[11px] ${!periodInfo.isRange ? 'nim-btn--primary' : ''
+                  }`}
               >
                 1 Bulan
               </button>
@@ -817,9 +816,8 @@ export function AdminDashboard({
                   setStartMonth(1);
                   setEndMonth(6);
                 }}
-                className={`nim-btn nim-btn--sm text-[11px] ${
-                  startMonth === 1 && endMonth === 6 ? 'nim-btn--primary' : ''
-                }`}
+                className={`nim-btn nim-btn--sm text-[11px] ${startMonth === 1 && endMonth === 6 ? 'nim-btn--primary' : ''
+                  }`}
               >
                 Jan–Jun
               </button>
@@ -829,9 +827,8 @@ export function AdminDashboard({
                   setStartMonth(7);
                   setEndMonth(12);
                 }}
-                className={`nim-btn nim-btn--sm text-[11px] ${
-                  startMonth === 7 && endMonth === 12 ? 'nim-btn--primary' : ''
-                }`}
+                className={`nim-btn nim-btn--sm text-[11px] ${startMonth === 7 && endMonth === 12 ? 'nim-btn--primary' : ''
+                  }`}
               >
                 Jul–Des
               </button>
@@ -1092,11 +1089,10 @@ export function AdminDashboard({
                                     {grp.title}
                                   </h4>
                                   <span
-                                    className={`nim-badge ${
-                                      grp.id === 'kependidikan'
+                                    className={`nim-badge ${grp.id === 'kependidikan'
                                         ? 'nim-badge--warn'
                                         : 'nim-badge--accent'
-                                    }`}
+                                      }`}
                                   >
                                     {formatRibuan(grp.items.length)} Orang
                                   </span>
@@ -1125,8 +1121,7 @@ export function AdminDashboard({
                                           year: selectedPayroll.year,
                                           payroll_status: selectedPayroll.status,
                                         })),
-                                        `${grp.id}_${getMonthName(selectedPayroll.month)}_${
-                                          selectedPayroll.year
+                                        `${grp.id}_${getMonthName(selectedPayroll.month)}_${selectedPayroll.year
                                         }`
                                       );
                                       notify.success(
@@ -1495,13 +1490,12 @@ export function AdminDashboard({
                                 return (
                                   <div
                                     key={lg.id}
-                                    className={`rounded-lg px-2.5 py-2 text-[11px] border space-y-1.5 ${
-                                      isInvalid
+                                    className={`rounded-lg px-2.5 py-2 text-[11px] border space-y-1.5 ${isInvalid
                                         ? 'border-rose-300 bg-rose-50/70'
                                         : vStatus === 'valid'
-                                        ? 'border-emerald-300/80 bg-white'
-                                        : 'border-slate-200 bg-white/95'
-                                    }`}
+                                          ? 'border-emerald-300/80 bg-white'
+                                          : 'border-slate-200 bg-white/95'
+                                      }`}
                                   >
                                     <div className="flex flex-wrap items-start justify-between gap-2">
                                       <div className="min-w-0 space-y-0.5">
@@ -1528,11 +1522,10 @@ export function AdminDashboard({
 
                                       <div className="flex flex-wrap items-center gap-1.5 shrink-0">
                                         <span
-                                          className={`font-bold tabular-nums mr-1 ${
-                                            isInvalid
+                                          className={`font-bold tabular-nums mr-1 ${isInvalid
                                               ? 'line-through text-rose-500'
                                               : 'text-indigo-700'
-                                          }`}
+                                            }`}
                                         >
                                           +{formatAttendanceNumber(cond.presentWeight)} •{' '}
                                           {formatAttendanceNumber(
@@ -1548,11 +1541,10 @@ export function AdminDashboard({
                                             handleValidateAttendanceLogs(lg.id, 'valid', '', lg.id)
                                           }
                                           title="Tandai log ini Valid (masuk hitungan Kehadiran & JTM)"
-                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-semibold border transition-colors ${
-                                            vStatus === 'valid'
+                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-semibold border transition-colors ${vStatus === 'valid'
                                               ? 'border-emerald-600 bg-emerald-600 text-white'
                                               : 'border-emerald-300 bg-white text-emerald-700 hover:bg-emerald-50'
-                                          }`}
+                                            }`}
                                         >
                                           <Check className="h-3 w-3" />
                                           <span>Valid</span>
@@ -1570,11 +1562,10 @@ export function AdminDashboard({
                                             )
                                           }
                                           title="Tandai Tidak Valid (tidak dihitung ke Kehadiran & JTM)"
-                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-semibold border transition-colors ${
-                                            isInvalid
+                                          className={`inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[10.5px] font-semibold border transition-colors ${isInvalid
                                               ? 'border-rose-600 bg-rose-600 text-white'
                                               : 'border-rose-300 bg-white text-rose-700 hover:bg-rose-50'
-                                          }`}
+                                            }`}
                                         >
                                           <Ban className="h-3 w-3" />
                                           <span>Tidak Valid</span>
@@ -1774,11 +1765,10 @@ export function AdminDashboard({
                           <div>
                             <div className="flex flex-wrap items-center gap-1.5 mb-1">
                               <span
-                                className={`nim-badge !text-[10.5px] ${
-                                  catId === 'kependidikan'
+                                className={`nim-badge !text-[10.5px] ${catId === 'kependidikan'
                                     ? 'nim-badge--warn'
                                     : 'nim-badge--good'
-                                }`}
+                                  }`}
                               >
                                 {catLabel}
                               </span>
@@ -1841,9 +1831,8 @@ export function AdminDashboard({
                             {parseCustomComponents(comp.custom_components_json).map((cust) => (
                               <span
                                 key={cust.id}
-                                className={`nim-badge ${
-                                  cust.type === 'allowance' ? 'nim-badge--good' : 'nim-badge--bad'
-                                }`}
+                                className={`nim-badge ${cust.type === 'allowance' ? 'nim-badge--good' : 'nim-badge--bad'
+                                  }`}
                               >
                                 <span>{cust.label}:</span>
                                 <span className="tabular-nums">
