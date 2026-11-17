@@ -239,12 +239,15 @@ export function AdminDashboard({
     setIsEditingTeacher(true);
     setTeacherForm({
       id: teacher.id,
-      nip: teacher.nip || '',
-      name: teacher.name || '',
+      nip: teacher.nip !== undefined && teacher.nip !== null ? String(teacher.nip) : '',
+      name: teacher.name !== undefined && teacher.name !== null ? String(teacher.name) : '',
       staff_category: resolveStaffCategory(teacher),
-      status: teacher.status || 'GTY (Guru Tetap Yayasan)',
-      bank_account: teacher.bank_account || '',
-      email: teacher.email || '',
+      status: teacher.status ? String(teacher.status) : 'GTY (Guru Tetap Yayasan)',
+      bank_account:
+        teacher.bank_account !== undefined && teacher.bank_account !== null
+          ? String(teacher.bank_account)
+          : '',
+      email: teacher.email !== undefined && teacher.email !== null ? String(teacher.email) : '',
       base_salary: Number(comp.base_salary || 0),
       hourly_rate: Number(comp.hourly_rate || 0),
       position_allowance: Number(comp.position_allowance || 0),
@@ -335,12 +338,15 @@ export function AdminDashboard({
 
   const handleSaveTeacher = async (e) => {
     e.preventDefault();
-    if (!teacherForm.nip.trim() || !teacherForm.name.trim() || !teacherForm.bank_account.trim()) {
+    const cleanNip = String(teacherForm.nip ?? '').trim();
+    const cleanName = String(teacherForm.name ?? '').trim();
+    const cleanBank = String(teacherForm.bank_account ?? '').trim();
+    if (!cleanNip || !cleanName || !cleanBank) {
       notify.warn('NIP, Nama Lengkap, dan Nomor Rekening wajib diisi.');
       return;
     }
 
-    const cleanEmail = String(teacherForm.email || '')
+    const cleanEmail = String(teacherForm.email ?? '')
       .trim()
       .toLowerCase();
     if (cleanEmail && !cleanEmail.includes('@')) {
@@ -361,6 +367,9 @@ export function AdminDashboard({
 
     const submitPayload = {
       ...teacherForm,
+      nip: cleanNip,
+      name: cleanName,
+      bank_account: cleanBank,
       staff_category: resolveStaffCategory(teacherForm),
       email: cleanEmail,
       username: cleanEmail,
