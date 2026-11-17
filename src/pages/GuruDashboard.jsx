@@ -346,9 +346,7 @@ export function GuruDashboard({
           <DisbursementRequestSection
             teacherProfile={teacherProfile}
             initialPeriod={disbursementTargetPeriod}
-            onDisbursementChange={() => {
-              loadGuruData();
-            }}
+            onDisbursementChange={loadGuruData}
           />
         </motion.section>
       )}

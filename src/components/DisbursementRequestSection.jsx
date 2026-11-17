@@ -72,13 +72,12 @@ export function DisbursementRequestSection({
       const validReqs = Array.isArray(reqList) ? reqList : [];
       setEstimates(validEstimates);
       setRequests(validReqs);
-      onDisbursementChange?.({ estimates: validEstimates, requests: validReqs });
     } catch (err) {
       notify.error(err.message || 'Gagal memuat data pengajuan pencairan.');
     } finally {
       setLoading(false);
     }
-  }, [selectedMonth, selectedYear, onDisbursementChange]);
+  }, [selectedMonth, selectedYear]);
 
   useEffect(() => {
     loadData();
@@ -156,6 +155,7 @@ export function DisbursementRequestSection({
       );
       setReason('');
       await loadData();
+      onDisbursementChange?.();
     } catch (err) {
       notify.error(err.message || 'Gagal mengirim pengajuan pencairan.');
     } finally {
