@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   RotateCcw,
   Eye,
+  FileDown,
   ShieldAlert,
   Wallet,
   Users,
@@ -26,6 +27,7 @@ import {
 import ConfirmModal from '../components/ConfirmModal';
 import FloatingTabBar from '../components/FloatingTabBar';
 import DisbursementApprovalPanel from '../components/DisbursementApprovalPanel';
+import { downloadBatchPayslipsPdf } from '../utils/pdfSlipGenerator';
 
 const STATUS_META = {
   draft: { label: 'Draf Bendahara', cls: 'nim-badge' },
@@ -433,14 +435,39 @@ export function KepsekDashboard({
                 </strong>
               </p>
             </div>
-            <button
-              type="button"
-              onClick={() => setSelectedPayroll(null)}
-              aria-label="Tutup audit rincian"
-              className="nim-ibtn"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              {details.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    downloadBatchPayslipsPdf(
+                      details.map((row) => ({
+                        ...row,
+                        month: selectedPayroll.month,
+                        year: selectedPayroll.year,
+                        payroll_status: selectedPayroll.status,
+                      })),
+                      `Kepsek_${getMonthName(selectedPayroll.month)}_${selectedPayroll.year}`
+                    );
+                    notify.success(
+                      `Mengunduh ${details.length} slip PDF (2 slip per halaman A4).`
+                    );
+                  }}
+                  className="nim-btn nim-btn--primary nim-btn--sm"
+                >
+                  <FileDown className="h-3.5 w-3.5" />
+                  <span>Unduh Semua (2/Hal A4)</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedPayroll(null)}
+                aria-label="Tutup audit rincian"
+                className="nim-ibtn"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           <div className="fluid-container">

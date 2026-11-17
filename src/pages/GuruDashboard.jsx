@@ -25,7 +25,10 @@ import {
   getDisbursementScopeMeta,
   getDisbursementTimingMeta,
 } from '../utils/disbursementHelpers';
-import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
+import {
+  downloadBatchPayslipsPdf,
+  downloadPayslipPdf,
+} from '../utils/pdfSlipGenerator';
 import FloatingTabBar from '../components/FloatingTabBar';
 import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
 import DisbursementRequestSection from '../components/DisbursementRequestSection';
@@ -380,7 +383,7 @@ export function GuruDashboard({
             : 'hidden'
         }`}
       >
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <div>
             <h2 className="text-base sm:text-lg font-bold text-[var(--ink)]">
               Rincian Slip Gaji &amp; Estimasi Gaji Bersih
@@ -390,6 +393,24 @@ export function GuruDashboard({
               slip gaji resmi yang telah disetujui / dibayarkan.
             </p>
           </div>
+          {slips.length > 1 && (
+            <button
+              type="button"
+              onClick={() => {
+                downloadBatchPayslipsPdf(
+                  slips,
+                  `${teacherProfile.nip || 'PTK'}_Riwayat`
+                );
+                notify.success(
+                  `Mengunduh ${slips.length} slip gaji (2 slip per halaman A4).`
+                );
+              }}
+              className="nim-btn nim-btn--sm"
+            >
+              <FileDown className="h-3.5 w-3.5 text-[var(--accent-text)]" />
+              <span>Unduh Semua (2/Hal A4)</span>
+            </button>
+          )}
         </div>
 
         {loading ? (

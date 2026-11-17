@@ -50,7 +50,10 @@ import {
   getLogValidationMeta,
   normalizeLogValidationStatus,
 } from '../utils/attendanceHelpers';
-import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
+import {
+  downloadBatchPayslipsPdf,
+  downloadPayslipPdf,
+} from '../utils/pdfSlipGenerator';
 import ConfirmModal from '../components/ConfirmModal';
 import JtmCalculatorModal from '../components/JtmCalculatorModal';
 import TeacherImportModal, {
@@ -1109,16 +1112,43 @@ export function AdminDashboard({
                                   )
                                 </p>
                               </div>
-                              {grp.showCloseButton && (
-                                <button
-                                  type="button"
-                                  onClick={() => setSelectedPayroll(null)}
-                                  aria-label="Tutup rincian"
-                                  className="nim-ibtn"
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                              )}
+                              <div className="flex flex-wrap items-center gap-2">
+                                {grp.items.length > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      downloadBatchPayslipsPdf(
+                                        grp.items.map(({ detail }) => ({
+                                          ...detail,
+                                          month: selectedPayroll.month,
+                                          year: selectedPayroll.year,
+                                          payroll_status: selectedPayroll.status,
+                                        })),
+                                        `${grp.id}_${getMonthName(selectedPayroll.month)}_${
+                                          selectedPayroll.year
+                                        }`
+                                      );
+                                      notify.success(
+                                        `Mengunduh ${grp.items.length} slip PDF (${grp.title}, 2 slip per halaman A4).`
+                                      );
+                                    }}
+                                    className="nim-btn nim-btn--primary nim-btn--sm"
+                                  >
+                                    <FileDown className="h-3.5 w-3.5" />
+                                    <span>Cetak Semua (2/Hal A4)</span>
+                                  </button>
+                                )}
+                                {grp.showCloseButton && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setSelectedPayroll(null)}
+                                    aria-label="Tutup rincian"
+                                    className="nim-ibtn"
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
 
                             {grp.items.length === 0 ? (
