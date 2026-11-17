@@ -1,45 +1,108 @@
 import { jsPDF } from 'jspdf';
 import {
+  formatRibuan,
   formatRupiah,
   getMonthName,
+  getSingleMonthName,
+  getStaffCategoryLabel,
+  numberToTerbilang,
+  parsePeriodMonthKey,
   resolveInfaqZakatAmount,
   summarizeCustomComponents,
 } from './formatters';
+import { formatAttendanceNumber } from './attendanceHelpers';
 import { getSchoolProfile } from '../services/schoolProfileService';
 
-let cachedDefaultLogoDataUrl = null;
+import courierPrimeRegularUrl from '../assets/fonts/CourierPrime-Regular.ttf?url';
+import courierPrimeBoldUrl from '../assets/fonts/CourierPrime-Bold.ttf?url';
+import courierPrimeItalicUrl from '../assets/fonts/CourierPrime-Italic.ttf?url';
+import courierPrimeBoldItalicUrl from '../assets/fonts/CourierPrime-BoldItalic.ttf?url';
 
-async function resolveLogoDataUrl(logoSource) {
-  const src = String(logoSource || '/logo.png').trim();
-  if (src.startsWith('data:image/')) {
-    return src;
+let cachedCourierPrimeFonts = null;
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunks = [];
+  const step = 0x8000;
+  for (let i = 0; i < bytes.length; i += step) {
+    chunks.push(String.fromCharCode(...bytes.subarray(i, i + step)));
   }
-  if (src === '/logo.png' && cachedDefaultLogoDataUrl) {
-    return cachedDefaultLogoDataUrl;
-  }
-  try {
-    const res = await fetch(src);
-    if (!res.ok) return null;
-    const blob = await res.blob();
-    return await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        if (src === '/logo.png') {
-          cachedDefaultLogoDataUrl = reader.result;
-        }
-        resolve(reader.result);
-      };
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
+  return btoa(chunks.join(''));
+}
+
+async function fetchFontBase64(assetUrl) {
+  const res = await fetch(assetUrl);
+  if (!res.ok) throw new Error(`Gagal memuat font: ${assetUrl}`);
+  const buf = await res.arrayBuffer();
+  return arrayBufferToBase64(buf);
 }
 
 /**
- * Generates and downloads an official Digital Salary Slip PDF (`Slip_Gaji_<NIP>_<Bulan>_<Tahun>.pdf`).
- * Dynamically applies the configured School / Foundation identity (Name, Address, Logo, Signatories, Footer).
+ * Loads & registers Courier Prime (Regular, Bold, Italic, BoldItalic) into jsPDF VFS.
+ * Falls back cleanly to built-in 'courier' if offline asset fetch fails.
+ */
+async function registerCourierPrimeFont(doc) {
+  try {
+    if (!cachedCourierPrimeFonts) {
+      const [regular, bold, italic, boldItalic] = await Promise.all([
+        fetchFontBase64(courierPrimeRegularUrl),
+        fetchFontBase64(courierPrimeBoldUrl),
+        fetchFontBase64(courierPrimeItalicUrl),
+        fetchFontBase64(courierPrimeBoldItalicUrl),
+      ]);
+      cachedCourierPrimeFonts = { regular, bold, italic, boldItalic };
+    }
+
+    doc.addFileToVFS('CourierPrime-Regular.ttf', cachedCourierPrimeFonts.regular);
+    doc.addFont('CourierPrime-Regular.ttf', 'CourierPrime', 'normal');
+
+    doc.addFileToVFS('CourierPrime-Bold.ttf', cachedCourierPrimeFonts.bold);
+    doc.addFont('CourierPrime-Bold.ttf', 'CourierPrime', 'bold');
+
+    doc.addFileToVFS('CourierPrime-Italic.ttf', cachedCourierPrimeFonts.italic);
+    doc.addFont('CourierPrime-Italic.ttf', 'CourierPrime', 'italic');
+
+    doc.addFileToVFS('CourierPrime-BoldItalic.ttf', cachedCourierPrimeFonts.boldItalic);
+    doc.addFont('CourierPrime-BoldItalic.ttf', 'CourierPrime', 'bolditalic');
+
+    return 'CourierPrime';
+  } catch {
+    return 'courier';
+  }
+}
+
+function drawUnderlinedText(doc, text, x, y, options = {}) {
+  doc.text(text, x, y, options);
+  const width = doc.getTextWidth(text);
+  let startX = x;
+  if (options.align === 'center') {
+    startX = x - width / 2;
+  } else if (options.align === 'right') {
+    startX = x - width;
+  }
+  const prevLineWidth = doc.getLineWidth();
+  doc.setLineWidth(0.32);
+  doc.line(startX, y + 0.9, startX + width, y + 0.9);
+  doc.setLineWidth(prevLineWidth);
+}
+
+function buildPeriodeRangeLabel(monthValue, yearValue) {
+  const parsed = parsePeriodMonthKey(monthValue);
+  const yr = Number(yearValue) || new Date().getFullYear();
+  const startName = getSingleMonthName(parsed.startMonth);
+  const endName = getSingleMonthName(parsed.endMonth);
+  const lastDay = new Date(yr, parsed.endMonth, 0).getDate();
+  return `Periode 1 ${startName} ${yr} - ${lastDay} ${endName} ${yr}`;
+}
+
+function formatAmountCell(value) {
+  const num = Math.round(Number(value || 0));
+  return num > 0 ? formatRibuan(num) : '-';
+}
+
+/**
+ * Generates and downloads a formal Digital Salary Slip PDF (`Courier Prime`, two-column classic layout)
+ * matching the reference layout while supporting PTK Payroll & Partial/Full Disbursement slips.
  */
 export async function downloadPayslipPdf(slipRecord, customProfileOverride = null) {
   const profile = customProfileOverride || getSchoolProfile();
@@ -60,12 +123,21 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
     format: 'a4',
   });
 
-  const teacherName = details.teacher_name || slipRecord.teacher_name || '-';
-  const nip = details.nip || slipRecord.nip || '-';
-  const status = details.status || 'GTY';
-  const bankAccount = details.bank_account || slipRecord.bank_account || '-';
-  const monthName = getMonthName(details.month || slipRecord.month);
-  const year = details.year || slipRecord.year || new Date().getFullYear();
+  const fontFamily = await registerCourierPrimeFont(doc);
+  doc.setFont(fontFamily, 'normal');
+
+  const teacherName = String(details.teacher_name || slipRecord.teacher_name || '-');
+  const nip = String(details.nip || slipRecord.nip || '-');
+  const status = String(details.status || 'GTY');
+  const categoryLabel = getStaffCategoryLabel({
+    staff_category: details.staff_category || slipRecord.staff_category,
+    status,
+  });
+  const bankAccount = String(details.bank_account || slipRecord.bank_account || '-');
+  const rawMonth = details.month || slipRecord.month;
+  const year = Number(details.year || slipRecord.year || new Date().getFullYear());
+  const monthName = getMonthName(rawMonth);
+  const periodeLine = buildPeriodeRangeLabel(rawMonth, year);
 
   const baseSalary = Number(details.base_salary || 0);
   const totalJtm = Number(details.total_jtm || 0);
@@ -74,260 +146,250 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
   const positionAllowance = Number(details.position_allowance || 0);
   const infaqZakatDeduction = resolveInfaqZakatAmount(details);
   const customSummary = summarizeCustomComponents(details.custom_components);
+
   const grossSalary = Number(
     details.gross_salary ??
       baseSalary + jtmHonor + positionAllowance + customSummary.totalCustomAllowance
   );
-  const netSalary = Number(
-    slipRecord.net_salary ??
-      details.net_salary ??
-      Math.max(0, grossSalary - infaqZakatDeduction - customSummary.totalCustomDeduction)
+  const totalDeductions = infaqZakatDeduction + customSummary.totalCustomDeduction;
+  const estimatedNetSalary = Math.max(
+    0,
+    Number(details.estimated_net_salary ?? details.net_salary ?? grossSalary - totalDeductions)
   );
-
-  // Header Banner (Matches dark forest green brand palette #19381f)
-  doc.setFillColor(25, 56, 31);
-  doc.rect(0, 0, 210, 42, 'F');
-
-  const logoDataUrl = await resolveLogoDataUrl(profile.logo_data_url);
-  let textStartX = 15;
-  if (logoDataUrl) {
-    try {
-      const imgFormat = logoDataUrl.startsWith('data:image/jpeg') ? 'JPEG' : 'PNG';
-      doc.addImage(logoDataUrl, imgFormat, 15, 7, 28, 28);
-      textStartX = 48;
-    } catch {
-      textStartX = 15;
-    }
-  }
-
-  const foundationHeader = String(profile.foundation_name || 'YAYASAN PENDIDIKAN NUSANTARA').toUpperCase();
-  const schoolSubHeader = String(profile.school_name || 'SLIP GAJI RESMI PENDIDIK & TENAGA KEPENDIDIKAN');
-  const addressLine = [profile.address, profile.contact_info].filter(Boolean).join(' • ');
-
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text(foundationHeader.slice(0, 58), textStartX, 14);
-
-  doc.setFontSize(11);
-  doc.setTextColor(220, 252, 231);
-  doc.text(schoolSubHeader.slice(0, 68), textStartX, 20.5);
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(8.5);
-  doc.setTextColor(203, 213, 225);
-  if (addressLine) {
-    doc.text(addressLine.slice(0, 92), textStartX, 26.5);
-  }
 
   const isDisbursementSlip =
     slipRecord.slip_type === 'disbursement' || details.slip_type === 'disbursement';
   const disbursementScopeLabel =
-    details.request_scope === 'partial' ? 'SEBAGIAN' : 'SELURUHNYA';
+    (details.request_scope || slipRecord.request_scope) === 'partial'
+      ? 'SEBAGIAN'
+      : 'SELURUHNYA';
   const disbursementTimingLabel =
-    details.disbursement_timing === 'early' ? 'SEBELUM WAKTUNYA' : 'TEPAT WAKTU KOLEKTIF';
+    (details.disbursement_timing || slipRecord.disbursement_timing) === 'early'
+      ? 'SEBELUM WAKTUNYA'
+      : 'TEPAT WAKTU';
   const approvedDisbursementAmount = Number(
-    details.approved_amount ?? slipRecord.approved_amount ?? netSalary
+    details.approved_amount ?? slipRecord.approved_amount ?? slipRecord.net_salary ?? estimatedNetSalary
   );
-  const fullEstimatedNet = Number(details.estimated_net_salary ?? netSalary);
   const remainingEstimatedSalary = Math.max(
     0,
-    Number(details.remaining_estimated_salary ?? fullEstimatedNet - approvedDisbursementAmount)
+    Number(details.remaining_estimated_salary ?? estimatedNetSalary - approvedDisbursementAmount)
   );
+  const finalTakeHomePay = isDisbursementSlip
+    ? approvedDisbursementAmount
+    : Number(slipRecord.net_salary ?? estimatedNetSalary);
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9.5);
-  doc.setTextColor(255, 255, 255);
-  const slipStatusLabel = isDisbursementSlip
-    ? `SLIP PENCAIRAN RESMI (${disbursementScopeLabel} • ${disbursementTimingLabel})`
-    : slipRecord.payroll_status === 'draft'
-    ? 'ESTIMASI SLIP GAJI (DRAF)'
-    : slipRecord.payroll_status === 'submitted'
-    ? 'ESTIMASI SLIP GAJI (MENUNGGU KEPSEK)'
-    : 'SLIP GAJI RESMI';
-  doc.text(
-    `${slipStatusLabel}  |  Periode: ${monthName} ${year}  |  Ref: ${String(slipRecord.id || 'DOC').slice(0, 8).toUpperCase()}`,
-    textStartX,
-    33.5
-  );
+  // Page & Frame Coordinates (matches classic boxed payslip format)
+  const frameX = 12;
+  const frameY = 12;
+  const frameW = 186;
+  const centerX = 105;
+  const contentLeft = 18;
+  const contentRight = 192;
 
-  // Employee Identity Box
+  let y = 20;
   doc.setTextColor(15, 23, 42);
-  doc.setDrawColor(226, 232, 240);
-  doc.setFillColor(248, 250, 252);
-  doc.roundedRect(15, 48, 180, 34, 3, 3, 'FD');
 
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Nama Pendidik', 20, 57);
-  doc.text('NIP / NIY', 20, 65);
-  doc.text('Status Kepegawaian', 20, 73);
+  // Header: Institution Name & Address + Contact
+  const institutionTitle =
+    [profile.foundation_name, profile.school_name].filter(Boolean).join(' — ') ||
+    'YAYASAN PENDIDIKAN NUSANTARA';
+  const addressContactLine = [
+    profile.address || '',
+    profile.contact_info ? `Telepon ${profile.contact_info}` : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
 
-  doc.setFont('helvetica', 'normal');
-  doc.text(`: ${teacherName}`, 60, 57);
-  doc.text(`: ${nip}`, 60, 65);
-  doc.text(`: ${status}`, 60, 73);
-
-  doc.setFont('helvetica', 'bold');
-  doc.text('Rekening Tujuan', 115, 57);
-  doc.text('Kehadiran / Alpa', 115, 65);
-  doc.text('Total Jam (JTM)', 115, 73);
-
-  doc.setFont('helvetica', 'normal');
-  doc.text(`: ${bankAccount}`, 152, 57);
-  doc.text(`: ${details.present_days || 0} Hari / ${details.absent_days || 0} Alpa`, 152, 65);
-  doc.text(`: ${totalJtm} Jam Pelajaran`, 152, 73);
-
-  // Earnings Section
-  let y = 93;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(25, 56, 31);
-  doc.text('A. RINCIAN PENERIMAAN', 15, y);
-  y += 4;
-  doc.setDrawColor(187, 247, 208);
-  doc.line(15, y, 195, y);
-
-  y += 9;
-  doc.setTextColor(15, 23, 42);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(10);
-
-  doc.text('1. Gaji Pokok', 20, y);
-  doc.text(formatRupiah(baseSalary), 190, y, { align: 'right' });
-
-  y += 8;
-  doc.text(`2. Honor Mengajar (${totalJtm} JTM x ${formatRupiah(hourlyRate)})`, 20, y);
-  doc.text(formatRupiah(jtmHonor), 190, y, { align: 'right' });
-
-  y += 8;
-  doc.text('3. Tunjangan Jabatan & Fungsional', 20, y);
-  doc.text(formatRupiah(positionAllowance), 190, y, { align: 'right' });
-
-  customSummary.allowances.forEach((item, idx) => {
-    y += 8;
-    doc.text(`${4 + idx}. ${item.label}`, 20, y);
-    doc.text(formatRupiah(item.amount), 190, y, { align: 'right' });
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(11.5);
+  const wrappedOrg = doc.splitTextToSize(institutionTitle, 174);
+  wrappedOrg.forEach((line) => {
+    doc.text(line, centerX, y, { align: 'center' });
+    y += 4.8;
   });
 
+  if (addressContactLine) {
+    doc.setFont(fontFamily, 'normal');
+    doc.setFontSize(9.5);
+    const wrappedAddr = doc.splitTextToSize(addressContactLine, 174);
+    wrappedAddr.forEach((line) => {
+      doc.text(line, centerX, y, { align: 'center' });
+      y += 4.2;
+    });
+  }
+
+  // Full-width dashed separator line
+  y += 1.5;
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.5);
+  doc.setLineDashPattern([1.6, 1.1], 0);
+  doc.line(frameX + 2, y, frameX + frameW - 2, y);
+  doc.setLineDashPattern([], 0);
+  doc.setLineWidth(0.28);
+
+  // Title (Bold + Underlined) & Period
   y += 6;
-  doc.setDrawColor(226, 232, 240);
-  doc.line(20, y, 190, y);
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(10.5);
+  const mainTitle = isDisbursementSlip
+    ? `SLIP GAJI PENCAIRAN PTK (${disbursementScopeLabel})`
+    : slipRecord.payroll_status === 'draft'
+    ? 'ESTIMASI SLIP GAJI PTK (DRAF)'
+    : slipRecord.payroll_status === 'submitted'
+    ? 'ESTIMASI SLIP GAJI PTK (MENUNGGU KEPSEK)'
+    : 'SLIP GAJI PTK';
+  drawUnderlinedText(doc, mainTitle, centerX, y, { align: 'center' });
 
-  y += 7;
-  doc.setFont('helvetica', 'bold');
-  doc.text('Total Penerimaan Kotor (Gross)', 20, y);
-  doc.text(formatRupiah(grossSalary), 190, y, { align: 'right' });
-
-  // Deductions Section
-  y += 13;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(190, 18, 60);
-  doc.text('B. RINCIAN POTONGAN', 15, y);
-  y += 4;
-  doc.setDrawColor(254, 205, 211);
-  doc.line(15, y, 195, y);
-
-  y += 9;
-  doc.setTextColor(15, 23, 42);
-  doc.setFont('helvetica', 'normal');
+  y += 4.8;
+  doc.setFont(fontFamily, 'bold');
   doc.setFontSize(10);
-  doc.text(
-    infaqZakatDeduction > 0
-      ? '1. Infaq / Zakat Profesi (2,5%)'
-      : '1. Infaq / Zakat Profesi (Tidak Aktif / Opsional)',
-    20,
-    y
-  );
-  doc.text(
-    infaqZakatDeduction > 0 ? `- ${formatRupiah(infaqZakatDeduction)}` : 'Rp 0',
-    190,
-    y,
-    { align: 'right' }
-  );
+  doc.text(periodeLine, centerX, y, { align: 'center' });
 
-  customSummary.deductions.forEach((item, idx) => {
-    y += 8;
-    doc.text(`${2 + idx}. ${item.label}`, 20, y);
-    doc.text(`- ${formatRupiah(item.amount)}`, 190, y, { align: 'right' });
+  // Identity Block (Left Aligned, Courier Prime colon alignment)
+  y += 8.5;
+  doc.setFont(fontFamily, 'normal');
+  doc.setFontSize(9.5);
+  const identityRows = [
+    ['NIP/NIY', nip],
+    ['Nama', teacherName],
+    ['Kategori', `${categoryLabel} (${bankAccount})`],
+    ['Status', status],
+    [
+      'Kehadiran',
+      `${formatAttendanceNumber(details.present_days || 0)} Hadir / ${formatAttendanceNumber(
+        details.absent_days || 0
+      )} Alpa (${formatAttendanceNumber(totalJtm)} JTM)`,
+    ],
+  ];
+  if (isDisbursementSlip) {
+    identityRows.push([
+      'Pencairan',
+      `${disbursementScopeLabel} - ${disbursementTimingLabel}`,
+    ]);
+  }
+
+  identityRows.forEach(([label, val]) => {
+    doc.text(label, contentLeft, y);
+    doc.text(`: ${val}`, contentLeft + 21, y);
+    y += 4.6;
   });
 
-  if (customSummary.deductions.length > 0) {
-    y += 6;
-    doc.setDrawColor(226, 232, 240);
-    doc.line(20, y, 190, y);
-    y += 7;
-    doc.setFont('helvetica', 'bold');
-    doc.text('Total Seluruh Potongan', 20, y);
+  // Two-Column Section: Penghasilan (Left) & Potongan (Right)
+  y += 5;
+  const colLeftX = contentLeft;
+  const colLeftEqX = 60;
+  const colLeftAmtX = 99;
+
+  const colRightX = 109;
+  const colRightEqX = 151;
+  const colRightAmtX = contentRight;
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(10);
+  drawUnderlinedText(doc, 'Penghasilan', colLeftX, y);
+  drawUnderlinedText(doc, 'Potongan', colRightX, y);
+
+  const earningsRows = [
+    { label: 'Gaji Pokok', amount: baseSalary },
+    {
+      label: `Honor JTM (${formatAttendanceNumber(totalJtm)}j)`,
+      amount: jtmHonor,
+    },
+    { label: 'Tj. Jabatan', amount: positionAllowance },
+    ...customSummary.allowances.map((item) => ({
+      label: item.label,
+      amount: item.amount,
+    })),
+  ];
+
+  const deductionRows = [
+    { label: 'Infaq/Zakat 2,5%', amount: infaqZakatDeduction },
+    ...customSummary.deductions.map((item) => ({
+      label: item.label,
+      amount: item.amount,
+    })),
+  ];
+
+  const startItemsY = y + 5.2;
+  const rowStep = 4.8;
+  doc.setFontSize(9.5);
+
+  let leftY = startItemsY;
+  earningsRows.forEach((row) => {
+    doc.setFont(fontFamily, 'bold');
+    doc.text(String(row.label).slice(0, 20), colLeftX, leftY);
+    doc.text('=', colLeftEqX, leftY);
+    doc.setFont(fontFamily, 'normal');
+    doc.text(formatAmountCell(row.amount), colLeftAmtX, leftY, { align: 'right' });
+    leftY += rowStep;
+  });
+
+  let rightY = startItemsY;
+  deductionRows.forEach((row) => {
+    doc.setFont(fontFamily, 'normal');
+    doc.text(String(row.label).slice(0, 20), colRightX, rightY);
+    doc.text('=', colRightEqX, rightY);
+    doc.text(formatAmountCell(row.amount), colRightAmtX, rightY, { align: 'right' });
+    rightY += rowStep;
+  });
+
+  // Align Total (A) and Total (B) on the exact same baseline
+  const totalRowY = Math.max(leftY, rightY) + 0.5;
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(9.5);
+  doc.text('Total (A)', colLeftEqX - 3, totalRowY);
+  doc.text(formatAmountCell(grossSalary), colLeftAmtX, totalRowY, { align: 'right' });
+
+  doc.text('Total (B)', colRightEqX - 3, totalRowY);
+  doc.text(formatAmountCell(totalDeductions), colRightAmtX, totalRowY, { align: 'right' });
+
+  // Double-Row Bordered Box: Penerimaan Bersih (A-B) & Terbilang
+  y = totalRowY + 6.5;
+  const boxX = contentLeft;
+  const boxW = contentRight - contentLeft;
+  const row1H = isDisbursementSlip ? 11.2 : 6.8;
+  const row2H = 7.2;
+
+  doc.setDrawColor(15, 23, 42);
+  doc.setLineWidth(0.32);
+  doc.rect(boxX, y, boxW, row1H);
+  doc.rect(boxX, y + row1H, boxW, row2H);
+
+  doc.setFont(fontFamily, 'bold');
+  doc.setFontSize(10);
+  if (isDisbursementSlip) {
     doc.text(
-      `- ${formatRupiah(infaqZakatDeduction + customSummary.totalCustomDeduction)}`,
-      190,
-      y,
-      { align: 'right' }
+      `Penerimaan Bersih (A-B) = ${formatRupiah(estimatedNetSalary)}`,
+      centerX,
+      y + 4.4,
+      { align: 'center' }
+    );
+    doc.setFontSize(9.5);
+    const disbText =
+      remainingEstimatedSalary > 0
+        ? `Dicairkan Disetujui = ${formatRupiah(approvedDisbursementAmount)} (Sisa: ${formatRupiah(
+            remainingEstimatedSalary
+          )})`
+        : `Dicairkan Disetujui = ${formatRupiah(approvedDisbursementAmount)}`;
+    doc.text(disbText, centerX, y + 9.2, { align: 'center' });
+  } else {
+    doc.text(
+      `Penerimaan Bersih (A-B) = ${formatRupiah(finalTakeHomePay)}`,
+      centerX,
+      y + 4.7,
+      { align: 'center' }
     );
   }
 
-  if (isDisbursementSlip) {
-    y += 10;
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10.5);
-    doc.setTextColor(30, 64, 175);
-    doc.text('C. RINCIAN PENCAIRAN GAJI YANG DISETUJUI', 15, y);
-    y += 4;
-    doc.setDrawColor(191, 219, 254);
-    doc.line(15, y, 195, y);
+  // Terbilang Row (Italic, Centered)
+  doc.setFont(fontFamily, 'italic');
+  doc.setFontSize(9.2);
+  const terbilangText = `Terbilang: ${numberToTerbilang(finalTakeHomePay)} rupiah`;
+  const wrappedTerbilang = doc.splitTextToSize(terbilangText, boxW - 6);
+  doc.text(wrappedTerbilang[0], centerX, y + row1H + 4.8, { align: 'center' });
 
-    y += 7;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9.5);
-    doc.setTextColor(15, 23, 42);
-    doc.text('Estimasi Gaji Bersih Periode', 20, y);
-    doc.text(formatRupiah(fullEstimatedNet), 190, y, { align: 'right' });
-
-    y += 6.5;
-    doc.text(`Jenis & Jadwal: ${disbursementScopeLabel} (${disbursementTimingLabel})`, 20, y);
-    doc.setFont('helvetica', 'bold');
-    doc.text(formatRupiah(approvedDisbursementAmount), 190, y, { align: 'right' });
-
-    if (remainingEstimatedSalary > 0) {
-      y += 6.5;
-      doc.setFont('helvetica', 'normal');
-      doc.text('Sisa Estimasi Belum Dicairkan', 20, y);
-      doc.text(formatRupiah(remainingEstimatedSalary), 190, y, { align: 'right' });
-    }
-  }
-
-  // Net Salary Box
-  y += 11;
-  doc.setFillColor(240, 253, 244);
-  doc.setDrawColor(22, 163, 74);
-  doc.roundedRect(15, y, 180, 19, 3, 3, 'FD');
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(20, 83, 45);
-  doc.text(
-    isDisbursementSlip
-      ? 'NOMINAL PENCAIRAN DISETUJUI (DITERIMA)'
-      : 'TAKE HOME PAY (GAJI BERSIH DITERIMA)',
-    22,
-    y + 12
-  );
-  doc.setFontSize(13.5);
-  doc.text(
-    formatRupiah(isDisbursementSlip ? approvedDisbursementAmount : netSalary),
-    188,
-    y + 12,
-    { align: 'right' }
-  );
-
-  // Official Signatories Block (Kepala Sekolah & Bendahara)
-  y += 26;
-  if (y > 245) {
-    doc.addPage();
-    y = 24;
-  }
+  // Signatories Section
+  y = y + row1H + row2H + 9;
   const formattedDate = new Date().toLocaleDateString('id-ID', {
     day: 'numeric',
     month: 'long',
@@ -335,48 +397,40 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
   });
   const cityName = profile.city || 'Bandung';
 
-  doc.setTextColor(15, 23, 42);
-  doc.setFont('helvetica', 'normal');
+  doc.setFont(fontFamily, 'normal');
   doc.setFontSize(9.5);
 
-  // Left: Principal
-  doc.text('Mengetahui,', 25, y);
-  doc.text('Kepala Sekolah', 25, y + 5);
-  doc.setFont('helvetica', 'bold');
-  doc.text(profile.principal_name || 'Kepala Sekolah', 25, y + 24);
-  doc.setFont('helvetica', 'normal');
+  // Left Signatory: Kepala Sekolah
+  doc.text('Mengetahui,', contentLeft + 2, y);
+  doc.text('Kepala Sekolah', contentLeft + 2, y + 4.5);
+  doc.setFont(fontFamily, 'bold');
+  doc.text(profile.principal_name || 'Kepala Sekolah', contentLeft + 2, y + 20);
   if (profile.principal_nip) {
+    doc.setFont(fontFamily, 'normal');
     doc.setFontSize(8.5);
-    doc.text(`NIP/NIY: ${profile.principal_nip}`, 25, y + 28.5);
+    doc.text(`NIP/NIY: ${profile.principal_nip}`, contentLeft + 2, y + 24);
   }
 
-  // Right: Treasurer
+  // Right Signatory: Bendahara (matching reference layout right block)
+  const rightSignX = 128;
+  doc.setFont(fontFamily, 'normal');
   doc.setFontSize(9.5);
-  doc.text(`${cityName}, ${formattedDate}`, 130, y);
-  doc.text('Bendahara Sekolah / Yayasan', 130, y + 5);
-  doc.setFont('helvetica', 'bold');
-  doc.text(profile.treasurer_name || 'Bendahara', 130, y + 24);
-  doc.setFont('helvetica', 'normal');
+  doc.text(`${cityName}, ${formattedDate}`, rightSignX, y);
+  doc.text('Bendahara Sekolah / Yayasan', rightSignX, y + 4.5);
+  doc.setFont(fontFamily, 'bold');
+  doc.text(profile.treasurer_name || 'Bendahara', rightSignX, y + 20);
   if (profile.treasurer_nip) {
+    doc.setFont(fontFamily, 'normal');
     doc.setFontSize(8.5);
-    doc.text(`NIP/NIY: ${profile.treasurer_nip}`, 130, y + 28.5);
+    doc.text(`NIP/NIY: ${profile.treasurer_nip}`, rightSignX, y + 24);
   }
 
-  // Verification Footer
-  y += 38;
-  doc.setDrawColor(226, 232, 240);
-  doc.line(15, y - 4, 195, y - 4);
-  doc.setFont('helvetica', 'italic');
-  doc.setFontSize(8.5);
-  doc.setTextColor(100, 116, 139);
-  doc.text(
-    String(
-      profile.slip_footer_note ||
-        'Dokumen ini diterbitkan secara resmi dan sah oleh Sistem Penggajian Sekolah / Yayasan.'
-    ).slice(0, 105),
-    15,
-    y
-  );
+  const bottomY = y + (profile.principal_nip || profile.treasurer_nip ? 29 : 25);
+
+  // Outer Frame around entire Payslip matching reference screenshot
+  doc.setDrawColor(100, 116, 139);
+  doc.setLineWidth(0.35);
+  doc.rect(frameX, frameY, frameW, Math.max(125, bottomY - frameY));
 
   const safeNip = String(nip).replace(/[^a-zA-Z0-9_-]/g, '');
   const filePrefix = isDisbursementSlip ? 'Slip_Pencairan' : 'Slip_Gaji';

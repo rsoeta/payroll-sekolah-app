@@ -49,6 +49,74 @@ export function formatRupiah(amount) {
 }
 
 /**
+ * Converts a non-negative integer into Indonesian spoken words ("Terbilang"), e.g.:
+ * 4425000 -> "Empat juta empat ratus dua puluh lima ribu"
+ */
+export function numberToTerbilang(num) {
+  const n = Math.round(Math.abs(Number(num || 0)));
+  if (!Number.isFinite(n) || n === 0) return 'Nol';
+
+  const units = [
+    '',
+    'satu',
+    'dua',
+    'tiga',
+    'empat',
+    'lima',
+    'enam',
+    'tujuh',
+    'delapan',
+    'sembilan',
+    'sepuluh',
+    'sebelas',
+  ];
+
+  function spell(val) {
+    if (val < 12) return units[val];
+    if (val < 20) return `${spell(val - 10)} belas`;
+    if (val < 100) {
+      const tens = Math.floor(val / 10);
+      const rem = val % 10;
+      return `${spell(tens)} puluh${rem ? ` ${spell(rem)}` : ''}`;
+    }
+    if (val < 200) {
+      const rem = val - 100;
+      return `seratus${rem ? ` ${spell(rem)}` : ''}`;
+    }
+    if (val < 1000) {
+      const hundreds = Math.floor(val / 100);
+      const rem = val % 100;
+      return `${spell(hundreds)} ratus${rem ? ` ${spell(rem)}` : ''}`;
+    }
+    if (val < 2000) {
+      const rem = val - 1000;
+      return `seribu${rem ? ` ${spell(rem)}` : ''}`;
+    }
+    if (val < 1000000) {
+      const thousands = Math.floor(val / 1000);
+      const rem = val % 1000;
+      return `${spell(thousands)} ribu${rem ? ` ${spell(rem)}` : ''}`;
+    }
+    if (val < 1000000000) {
+      const millions = Math.floor(val / 1000000);
+      const rem = val % 1000000;
+      return `${spell(millions)} juta${rem ? ` ${spell(rem)}` : ''}`;
+    }
+    if (val < 1000000000000) {
+      const billions = Math.floor(val / 1000000000);
+      const rem = val % 1000000000;
+      return `${spell(billions)} miliar${rem ? ` ${spell(rem)}` : ''}`;
+    }
+    const trillions = Math.floor(val / 1000000000000);
+    const rem = val % 1000000000000;
+    return `${spell(trillions)} triliun${rem ? ` ${spell(rem)}` : ''}`;
+  }
+
+  const raw = spell(n).replace(/\s+/g, ' ').trim();
+  return raw.charAt(0).toUpperCase() + raw.slice(1);
+}
+
+/**
  * Normalizes a month/period value:
  * - Single month: 11, "11", "11-11" -> "11"
  * - Month range : "1-3", "7-12"     -> "1-3", "7-12"
