@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
+  Banknote,
   Building2,
   CalendarCheck,
   CheckCircle2,
@@ -82,6 +83,14 @@ export function App() {
             description: 'Catat hari hadir, alpa, dan jam tatap muka',
           },
           {
+            id: 'disbursements',
+            label: 'Pencairan PTK',
+            group: 'Penggajian',
+            icon: Banknote,
+            badge: navBadges.disbursements,
+            description: 'Review pengajuan pencairan sebagian/penuh PTK',
+          },
+          {
             id: 'teachers',
             label: 'Master PTK & Gaji',
             group: 'Data & Institusi',
@@ -121,6 +130,14 @@ export function App() {
             icon: CheckCircle2,
             description: 'Periode gaji yang sudah disetujui & cair',
           },
+          {
+            id: 'disbursements',
+            label: 'Pencairan PTK',
+            group: 'Otorisasi Kepsek',
+            icon: Banknote,
+            badge: navBadges.disbursements,
+            description: 'Otorisasi pengajuan pencairan PTK & terbitkan slip',
+          },
         ];
       case 'guru':
         return [
@@ -139,6 +156,14 @@ export function App() {
             icon: CalendarCheck,
             badge: navBadges.attendance,
             description: 'Catat hadir, tugas, sakit/izin & JTM mandiri',
+          },
+          {
+            id: 'disbursements',
+            label: 'Ajukan Pencairan',
+            group: 'Portal PTK',
+            icon: Banknote,
+            badge: navBadges.disbursements,
+            description: 'Ajukan pencairan sebagian/seluruh estimasi gaji',
           },
           {
             id: 'profile',

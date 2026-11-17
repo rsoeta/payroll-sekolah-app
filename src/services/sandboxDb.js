@@ -365,6 +365,8 @@ async function buildInitialDatabase() {
   ];
 
   const Payroll_Details = [...octDetails, ...novDetails];
+  const Disbursement_Requests = [];
+  const Notifications = [];
 
   return {
     Users_Auth,
@@ -374,12 +376,23 @@ async function buildInitialDatabase() {
     Attendance_Logs,
     Payrolls,
     Payroll_Details,
+    Disbursement_Requests,
+    Notifications,
   };
 }
 
 function upgradeLegacyDbToGmail(db) {
   if (!db || !Array.isArray(db.Users_Auth)) return db;
   let modified = false;
+
+  if (!Array.isArray(db.Disbursement_Requests)) {
+    db.Disbursement_Requests = [];
+    modified = true;
+  }
+  if (!Array.isArray(db.Notifications)) {
+    db.Notifications = [];
+    modified = true;
+  }
 
   if (!Array.isArray(db.Attendance_Logs)) {
     db.Attendance_Logs = [];
@@ -1842,6 +1855,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             if (!parent) return null;
             return {
               ...d,
+              slip_type: 'payroll',
               month: parent.month,
               year: parent.year,
               payroll_status: parent.status,
@@ -1850,17 +1864,734 @@ export async function executeSandboxRequest(method, action, token, payload = {})
               bank_account: own.bank_account,
             };
           })
-          .filter(Boolean)
-          .sort((a, b) => {
-            const yrDiff = Number(b.year || 0) - Number(a.year || 0);
-            if (yrDiff !== 0) return yrDiff;
-            return (
-              parsePeriodMonthKey(b.month).endMonth - parsePeriodMonthKey(a.month).endMonth
-            );
-          });
-        return { ok: true, status: 200, data: mySlips };
+          .filter(Boolean);
+
+        const issuedDisbursementSlips = (db.Disbursement_Requests || [])
+          .filter(
+            (r) =>
+              r.teacher_id === own.id &&
+              r.status === 'approved' &&
+              r.issued_slip_id &&
+              r.issued_slip_json
+          )
+          .map((r) => ({
+            id: r.issued_slip_id,
+            slip_type: 'disbursement',
+            disbursement_request_id: r.id,
+            payroll_id: r.payroll_id || r.id,
+            teacher_id: own.id,
+            month: r.month,
+            year: r.year,
+            payroll_status: 'paid',
+            net_salary: Number(r.approved_amount || 0),
+            approved_amount: Number(r.approved_amount || 0),
+            request_scope: r.request_scope,
+            disbursement_timing: r.disbursement_timing,
+            slip_issued_at: r.slip_issued_at,
+            teacher_name: own.name,
+            nip: own.nip,
+            bank_account: own.bank_account,
+            details_json: r.issued_slip_json,
+          }));
+
+        const combinedSlips = [...issuedDisbursementSlips, ...mySlips].sort((a, b) => {
+          const yrDiff = Number(b.year || 0) - Number(a.year || 0);
+          if (yrDiff !== 0) return yrDiff;
+          const mDiff =
+            parsePeriodMonthKey(b.month).endMonth - parsePeriodMonthKey(a.month).endMonth;
+          if (mDiff !== 0) return mDiff;
+          if (a.slip_type === 'disbursement' && b.slip_type !== 'disbursement') return -1;
+          if (a.slip_type !== 'disbursement' && b.slip_type === 'disbursement') return 1;
+          return String(b.slip_issued_at || '').localeCompare(String(a.slip_issued_at || ''));
+        });
+
+        return { ok: true, status: 200, data: combinedSlips };
       }
       return forbidden();
+    }
+
+    case 'disbursements.estimates': {
+      if (session.role !== 'guru') return forbidden();
+      const own = getOwnedTeacher();
+      if (!own) return forbidden();
+
+      const buildEstimateSnapshot = (monthVal, yearVal) => {
+        const targetKey = normalizePeriodKey(monthVal);
+        const yr = Number(yearVal);
+        const matchingPayroll = (db.Payrolls || []).find(
+          (p) => normalizePeriodKey(p.month) === targetKey && Number(p.year) === yr
+        );
+        const matchingDetail = matchingPayroll
+          ? (db.Payroll_Details || []).find(
+              (d) => d.payroll_id === matchingPayroll.id && d.teacher_id === own.id
+            )
+          : null;
+
+        let estimatedNet = 0;
+        let detailsObj = null;
+        let payrollStatus = matchingPayroll ? matchingPayroll.status : 'estimate_live';
+
+        if (matchingDetail) {
+          estimatedNet = Number(matchingDetail.net_salary || 0);
+          try {
+            detailsObj = JSON.parse(matchingDetail.details_json || '{}');
+          } catch {
+            detailsObj = {};
+          }
+        } else {
+          const comp = db.Salary_Components.find((c) => c.teacher_id === own.id) || {
+            base_salary: 0,
+            hourly_rate: 0,
+            position_allowance: 0,
+            bpjs_deduction: 0,
+          };
+          const parsedPeriod = parsePeriodMonthKey(targetKey);
+          const rangeSet = new Set(parsedPeriod.monthsInRange.map((m) => String(m)));
+          let att = db.Attendances.find(
+            (a) =>
+              a.teacher_id === own.id &&
+              normalizePeriodKey(a.month) === targetKey &&
+              Number(a.year) === yr
+          );
+          if (!att && parsedPeriod.isRange) {
+            const subRows = db.Attendances.filter(
+              (a) =>
+                a.teacher_id === own.id &&
+                Number(a.year) === yr &&
+                rangeSet.has(normalizePeriodKey(a.month))
+            );
+            if (subRows.length > 0) {
+              att = {
+                present_days: subRows.reduce((s, r) => s + Number(r.present_days || 0), 0),
+                absent_days: subRows.reduce((s, r) => s + Number(r.absent_days || 0), 0),
+                total_jtm: subRows.reduce((s, r) => s + Number(r.total_jtm || 0), 0),
+              };
+            }
+          }
+          if (!att) {
+            const logs = (db.Attendance_Logs || []).filter(
+              (l) =>
+                l.teacher_id === own.id &&
+                Number(l.year) === yr &&
+                rangeSet.has(String(l.month))
+            );
+            att = computeAttendanceBreakdownFromLogs(logs);
+          }
+
+          const baseSalary = Number(comp.base_salary || 0);
+          const hourlyRate = Number(comp.hourly_rate || 0);
+          const totalJtm = Number(att.total_jtm || 0);
+          const jtmHonor = totalJtm * hourlyRate;
+          const posAllowance = Number(comp.position_allowance || 0);
+          let customComponents = [];
+          try {
+            customComponents = JSON.parse(comp.custom_components_json || '[]');
+            if (!Array.isArray(customComponents)) customComponents = [];
+          } catch {
+            customComponents = [];
+          }
+          const customAllowance = customComponents
+            .filter((c) => c.type === 'allowance')
+            .reduce((s, c) => s + Number(c.amount || 0), 0);
+          const customDeduction = customComponents
+            .filter((c) => c.type !== 'allowance')
+            .reduce((s, c) => s + Number(c.amount || 0), 0);
+          const infaqEnabled = isInfaqZakatEnabled(comp);
+          const infaqZakat = calculateInfaqZakat(baseSalary, jtmHonor, posAllowance, infaqEnabled);
+          const gross = baseSalary + jtmHonor + posAllowance + customAllowance;
+          estimatedNet = Math.max(0, gross - infaqZakat - customDeduction);
+
+          detailsObj = {
+            teacher_name: own.name,
+            nip: own.nip,
+            staff_category: resolveStaffCategory(own),
+            status: own.status,
+            bank_account: own.bank_account,
+            month: /^\d+$/.test(targetKey) ? Number(targetKey) : targetKey,
+            year: yr,
+            present_days: Number(att.present_days || 0),
+            absent_days: Number(att.absent_days || 0),
+            total_jtm: totalJtm,
+            base_salary: baseSalary,
+            hourly_rate: hourlyRate,
+            jtm_honor: jtmHonor,
+            position_allowance: posAllowance,
+            infaq_zakat_enabled: infaqEnabled,
+            infaq_zakat: infaqZakat,
+            bpjs_deduction: infaqZakat,
+            custom_components: customComponents,
+            custom_allowance_total: customAllowance,
+            custom_deduction_total: customDeduction,
+            gross_salary: gross,
+            net_salary: estimatedNet,
+          };
+        }
+
+        const periodReqs = (db.Disbursement_Requests || []).filter(
+          (r) =>
+            r.teacher_id === own.id &&
+            normalizePeriodKey(r.month) === targetKey &&
+            Number(r.year) === yr &&
+            r.status !== 'rejected'
+        );
+        const alreadyRequested = periodReqs.reduce(
+          (s, r) =>
+            s +
+            Number(
+              r.status === 'approved' || r.status === 'approved_treasurer'
+                ? r.approved_amount ?? r.requested_amount ?? 0
+                : r.requested_amount ?? 0
+            ),
+          0
+        );
+        const alreadyApproved = periodReqs
+          .filter((r) => r.status === 'approved')
+          .reduce((s, r) => s + Number(r.approved_amount || 0), 0);
+        const isPaid = payrollStatus === 'paid';
+        const availableAmount = isPaid ? 0 : Math.max(0, estimatedNet - alreadyRequested);
+
+        return {
+          period_key: `${yr}:${targetKey}`,
+          month: /^\d+$/.test(targetKey) ? Number(targetKey) : targetKey,
+          year: yr,
+          payroll_id: matchingPayroll ? matchingPayroll.id : '',
+          payroll_detail_id: matchingDetail ? matchingDetail.id : '',
+          payroll_status: payrollStatus,
+          is_paid: isPaid,
+          estimated_net_salary: estimatedNet,
+          already_requested_amount: alreadyRequested,
+          already_approved_amount: alreadyApproved,
+          available_amount: availableAmount,
+          details: detailsObj,
+        };
+      };
+
+      const seenPeriods = new Map();
+      (db.Payrolls || []).forEach((p) => {
+        const k = `${Number(p.year)}:${normalizePeriodKey(p.month)}`;
+        if (!seenPeriods.has(k)) {
+          seenPeriods.set(k, { month: p.month, year: Number(p.year) });
+        }
+      });
+
+      const reqMonth = payload.month ? normalizePeriodKey(payload.month) : null;
+      const reqYear = payload.year ? Number(payload.year) : null;
+      if (reqMonth && reqYear) {
+        const rk = `${reqYear}:${reqMonth}`;
+        if (!seenPeriods.has(rk)) {
+          seenPeriods.set(rk, { month: reqMonth, year: reqYear });
+        }
+      } else {
+        const now = new Date();
+        const curM = String(now.getMonth() + 1);
+        const curY = now.getFullYear();
+        const ck = `${curY}:${curM}`;
+        if (!seenPeriods.has(ck)) {
+          seenPeriods.set(ck, { month: Number(curM), year: curY });
+        }
+      }
+
+      const estimates = Array.from(seenPeriods.values())
+        .map((p) => buildEstimateSnapshot(p.month, p.year))
+        .sort((a, b) => {
+          const yrDiff = Number(b.year || 0) - Number(a.year || 0);
+          if (yrDiff !== 0) return yrDiff;
+          return (
+            parsePeriodMonthKey(b.month).endMonth - parsePeriodMonthKey(a.month).endMonth
+          );
+        });
+
+      return { ok: true, status: 200, data: estimates };
+    }
+
+    case 'disbursements.list': {
+      const allReqs = [...(db.Disbursement_Requests || [])].sort((a, b) =>
+        String(b.created_at || '').localeCompare(String(a.created_at || ''))
+      );
+      if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        if (!own) return forbidden();
+        return {
+          ok: true,
+          status: 200,
+          data: allReqs.filter((r) => r.teacher_id === own.id),
+        };
+      }
+      if (session.role === 'admin' || session.role === 'kepsek') {
+        return { ok: true, status: 200, data: allReqs };
+      }
+      return forbidden();
+    }
+
+    case 'disbursements.create': {
+      if (session.role !== 'guru') return forbidden();
+      const own = getOwnedTeacher();
+      if (!own) return forbidden();
+
+      const periodKey = normalizePeriodKey(payload.month);
+      const year = Number(payload.year);
+      if (!periodKey || !year || year < 2020 || year > 2100) {
+        return { ok: false, status: 400, error: 'Periode bulan/tahun pencairan tidak valid.' };
+      }
+
+      const scope = payload.request_scope === 'full' ? 'full' : 'partial';
+      const timing = payload.disbursement_timing === 'early' ? 'early' : 'ontime';
+      const reason = String(payload.reason || '').trim().slice(0, 240);
+
+      // Recalculate current estimate & available balance server-side
+      const matchingPayroll = (db.Payrolls || []).find(
+        (p) => normalizePeriodKey(p.month) === periodKey && Number(p.year) === year
+      );
+      if (matchingPayroll && matchingPayroll.status === 'paid') {
+        return {
+          ok: false,
+          status: 409,
+          error: 'Gaji periode ini sudah dibayarkan penuh secara kolektif.',
+        };
+      }
+      const matchingDetail = matchingPayroll
+        ? (db.Payroll_Details || []).find(
+            (d) => d.payroll_id === matchingPayroll.id && d.teacher_id === own.id
+          )
+        : null;
+
+      let estimatedNet = 0;
+      let detailsSnapshot = {};
+      if (matchingDetail) {
+        estimatedNet = Number(matchingDetail.net_salary || 0);
+        try {
+          detailsSnapshot = JSON.parse(matchingDetail.details_json || '{}');
+        } catch {
+          detailsSnapshot = {};
+        }
+      } else {
+        const comp = db.Salary_Components.find((c) => c.teacher_id === own.id) || {
+          base_salary: 0,
+          hourly_rate: 0,
+          position_allowance: 0,
+          bpjs_deduction: 0,
+        };
+        const parsedPeriod = parsePeriodMonthKey(periodKey);
+        const rangeSet = new Set(parsedPeriod.monthsInRange.map((m) => String(m)));
+        let att = db.Attendances.find(
+          (a) =>
+            a.teacher_id === own.id &&
+            normalizePeriodKey(a.month) === periodKey &&
+            Number(a.year) === year
+        );
+        if (!att) {
+          const logs = (db.Attendance_Logs || []).filter(
+            (l) =>
+              l.teacher_id === own.id &&
+              Number(l.year) === year &&
+              rangeSet.has(String(l.month))
+          );
+          att = computeAttendanceBreakdownFromLogs(logs);
+        }
+        const baseSalary = Number(comp.base_salary || 0);
+        const hourlyRate = Number(comp.hourly_rate || 0);
+        const totalJtm = Number(att.total_jtm || 0);
+        const jtmHonor = totalJtm * hourlyRate;
+        const posAllowance = Number(comp.position_allowance || 0);
+        let customComponents = [];
+        try {
+          customComponents = JSON.parse(comp.custom_components_json || '[]');
+          if (!Array.isArray(customComponents)) customComponents = [];
+        } catch {
+          customComponents = [];
+        }
+        const customAllowance = customComponents
+          .filter((c) => c.type === 'allowance')
+          .reduce((s, c) => s + Number(c.amount || 0), 0);
+        const customDeduction = customComponents
+          .filter((c) => c.type !== 'allowance')
+          .reduce((s, c) => s + Number(c.amount || 0), 0);
+        const infaqEnabled = isInfaqZakatEnabled(comp);
+        const infaqZakat = calculateInfaqZakat(baseSalary, jtmHonor, posAllowance, infaqEnabled);
+        const gross = baseSalary + jtmHonor + posAllowance + customAllowance;
+        estimatedNet = Math.max(0, gross - infaqZakat - customDeduction);
+        detailsSnapshot = {
+          teacher_name: own.name,
+          nip: own.nip,
+          staff_category: resolveStaffCategory(own),
+          status: own.status,
+          bank_account: own.bank_account,
+          month: /^\d+$/.test(periodKey) ? Number(periodKey) : periodKey,
+          year,
+          present_days: Number(att.present_days || 0),
+          absent_days: Number(att.absent_days || 0),
+          total_jtm: totalJtm,
+          base_salary: baseSalary,
+          hourly_rate: hourlyRate,
+          jtm_honor: jtmHonor,
+          position_allowance: posAllowance,
+          infaq_zakat_enabled: infaqEnabled,
+          infaq_zakat: infaqZakat,
+          bpjs_deduction: infaqZakat,
+          custom_components: customComponents,
+          custom_allowance_total: customAllowance,
+          custom_deduction_total: customDeduction,
+          gross_salary: gross,
+          net_salary: estimatedNet,
+        };
+      }
+
+      const activeRequestedSum = (db.Disbursement_Requests || [])
+        .filter(
+          (r) =>
+            r.teacher_id === own.id &&
+            normalizePeriodKey(r.month) === periodKey &&
+            Number(r.year) === year &&
+            r.status !== 'rejected'
+        )
+        .reduce(
+          (s, r) =>
+            s +
+            Number(
+              r.status === 'approved' || r.status === 'approved_treasurer'
+                ? r.approved_amount ?? r.requested_amount ?? 0
+                : r.requested_amount ?? 0
+            ),
+          0
+        );
+      const availableBalance = Math.max(0, estimatedNet - activeRequestedSum);
+      if (availableBalance <= 0) {
+        return {
+          ok: false,
+          status: 400,
+          error:
+            'Sisa estimasi gaji bersih periode ini sudah habis atau seluruhnya sedang diajukan.',
+        };
+      }
+
+      const requestedAmount =
+        scope === 'full'
+          ? availableBalance
+          : Math.round(Number(payload.requested_amount || 0));
+
+      if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+        return { ok: false, status: 400, error: 'Nominal pengajuan pencairan harus lebih dari Rp 0.' };
+      }
+      if (requestedAmount > availableBalance) {
+        return {
+          ok: false,
+          status: 400,
+          error: `Nominal melebihi sisa estimasi tersedia (maksimal Rp ${availableBalance.toLocaleString('id-ID')}).`,
+        };
+      }
+
+      const nowIso = new Date().toISOString();
+      const newReq = {
+        id: generateUuidV4(),
+        teacher_id: own.id,
+        teacher_name: own.name,
+        nip: own.nip,
+        month: /^\d+$/.test(periodKey) ? Number(periodKey) : periodKey,
+        year,
+        payroll_id: matchingPayroll ? matchingPayroll.id : '',
+        payroll_detail_id: matchingDetail ? matchingDetail.id : '',
+        estimated_net_salary: estimatedNet,
+        request_scope: scope,
+        disbursement_timing: timing,
+        requested_amount: requestedAmount,
+        approved_amount: requestedAmount,
+        reason,
+        status: 'pending_treasurer',
+        treasurer_note: '',
+        kepsek_note: '',
+        issued_slip_id: '',
+        issued_slip_json: JSON.stringify(detailsSnapshot),
+        created_at: nowIso,
+        treasurer_reviewed_at: '',
+        kepsek_reviewed_at: '',
+        slip_issued_at: '',
+      };
+
+      db.Disbursement_Requests.unshift(newReq);
+
+      const adminEmails = (db.Users_Auth || [])
+        .filter((u) => u.role === 'admin')
+        .map((u) => String(u.email || u.username || '').trim())
+        .filter((e) => e.includes('@'));
+
+      const timingLabel =
+        timing === 'early' ? 'Sebelum Waktunya (Pencairan Awal)' : 'Tepat Waktu (Kolektif)';
+      const scopeLabel = scope === 'full' ? 'Seluruhnya' : 'Sebagian';
+
+      db.Notifications.unshift({
+        id: generateUuidV4(),
+        recipient_role: 'admin',
+        recipient_teacher_id: '',
+        recipient_email: adminEmails.join(', '),
+        title: `Pengajuan Pencairan Gaji: ${own.name}`,
+        message: `${own.name} mengajukan pencairan ${scopeLabel} (${timingLabel}) sebesar Rp ${requestedAmount.toLocaleString('id-ID')} untuk periode ${periodKey}/${year}.${reason ? ` Catatan: ${reason}` : ''}`,
+        type: 'disbursement_submitted',
+        ref_id: newReq.id,
+        is_read: false,
+        created_at: nowIso,
+      });
+
+      saveDb(db);
+      return {
+        ok: true,
+        status: 201,
+        data: {
+          request: newReq,
+          notified_admin_emails: adminEmails,
+          email_sent: true,
+          simulation_email_notice:
+            adminEmails.length > 0
+              ? `Notifikasi email simulasi dicatat untuk ${adminEmails.join(', ')}`
+              : '',
+        },
+      };
+    }
+
+    case 'disbursements.treasurerReview': {
+      if (session.role !== 'admin') return forbidden();
+      const target = (db.Disbursement_Requests || []).find((r) => r.id === payload.id);
+      if (!target) return notFound();
+      if (target.status !== 'pending_treasurer') {
+        return {
+          ok: false,
+          status: 409,
+          error: 'Pengajuan ini sudah diproses Bendahara sebelumnya.',
+        };
+      }
+
+      const decision = payload.decision === 'reject' ? 'reject' : 'approve';
+      const note = String(payload.note || '').trim().slice(0, 240);
+      const nowIso = new Date().toISOString();
+
+      if (decision === 'reject') {
+        target.status = 'rejected';
+        target.treasurer_note = note || 'Ditolak oleh Admin/Bendahara.';
+        target.treasurer_reviewed_at = nowIso;
+
+        db.Notifications.unshift({
+          id: generateUuidV4(),
+          recipient_role: 'guru',
+          recipient_teacher_id: target.teacher_id,
+          recipient_email: '',
+          title: 'Pengajuan Pencairan Ditolak Bendahara',
+          message: `Pengajuan pencairan periode ${target.month}/${target.year} sebesar Rp ${Number(target.requested_amount).toLocaleString('id-ID')} ditolak.${note ? ` Alasan: ${note}` : ''}`,
+          type: 'disbursement_rejected',
+          ref_id: target.id,
+          is_read: false,
+          created_at: nowIso,
+        });
+      } else {
+        const approvedAmt =
+          payload.approved_amount !== undefined && Number(payload.approved_amount) > 0
+            ? Math.round(Number(payload.approved_amount))
+            : Number(target.requested_amount);
+        target.approved_amount = Math.min(approvedAmt, Number(target.estimated_net_salary || approvedAmt));
+        target.status = 'approved_treasurer';
+        target.treasurer_note = note;
+        target.treasurer_reviewed_at = nowIso;
+
+        db.Notifications.unshift({
+          id: generateUuidV4(),
+          recipient_role: 'kepsek',
+          recipient_teacher_id: '',
+          recipient_email: '',
+          title: `Menunggu Otorisasi Pencairan: ${target.teacher_name}`,
+          message: `Bendahara telah menyetujui pengajuan pencairan ${target.teacher_name} sebesar Rp ${Number(target.approved_amount).toLocaleString('id-ID')}. Menunggu persetujuan Kepala Sekolah.`,
+          type: 'disbursement_treasurer_approved',
+          ref_id: target.id,
+          is_read: false,
+          created_at: nowIso,
+        });
+      }
+
+      saveDb(db);
+      return { ok: true, status: 200, data: target };
+    }
+
+    case 'disbursements.bulkTreasurerApprove': {
+      if (session.role !== 'admin') return forbidden();
+      const ids = Array.isArray(payload.ids) ? payload.ids : [];
+      const note = String(payload.note || '').trim().slice(0, 240);
+      const nowIso = new Date().toISOString();
+      const updatedList = [];
+
+      (db.Disbursement_Requests || []).forEach((target) => {
+        if (target.status === 'pending_treasurer' && (ids.length === 0 || ids.includes(target.id))) {
+          target.approved_amount = Number(target.requested_amount || 0);
+          target.status = 'approved_treasurer';
+          target.treasurer_note = note || 'Disetujui kolektif oleh Bendahara.';
+          target.treasurer_reviewed_at = nowIso;
+          updatedList.push(target);
+        }
+      });
+
+      if (updatedList.length === 0) {
+        return { ok: false, status: 400, error: 'Tidak ada pengajuan menunggu yang dapat disetujui.' };
+      }
+
+      db.Notifications.unshift({
+        id: generateUuidV4(),
+        recipient_role: 'kepsek',
+        recipient_teacher_id: '',
+        recipient_email: '',
+        title: `${updatedList.length} Pengajuan Pencairan PTK Siap Diotorisasi`,
+        message: `Bendahara telah menyetujui ${updatedList.length} pengajuan pencairan PTK secara kolektif dan meneruskannya untuk otorisasi Kepala Sekolah.`,
+        type: 'disbursement_treasurer_approved',
+        ref_id: updatedList[0].id,
+        is_read: false,
+        created_at: nowIso,
+      });
+
+      saveDb(db);
+      return { ok: true, status: 200, data: updatedList };
+    }
+
+    case 'disbursements.kepsekReview': {
+      if (session.role !== 'kepsek') return forbidden();
+      const target = (db.Disbursement_Requests || []).find((r) => r.id === payload.id);
+      if (!target) return notFound();
+      if (target.status !== 'approved_treasurer') {
+        return {
+          ok: false,
+          status: 409,
+          error: 'Pengajuan harus disetujui Bendahara terlebih dahulu sebelum diotorisasi Kepsek.',
+        };
+      }
+
+      const decision = payload.decision === 'reject' ? 'reject' : 'approve';
+      const note = String(payload.note || '').trim().slice(0, 240);
+      const nowIso = new Date().toISOString();
+
+      if (decision === 'reject') {
+        target.status = 'rejected';
+        target.kepsek_note = note || 'Ditolak oleh Kepala Sekolah.';
+        target.kepsek_reviewed_at = nowIso;
+
+        db.Notifications.unshift({
+          id: generateUuidV4(),
+          recipient_role: 'guru',
+          recipient_teacher_id: target.teacher_id,
+          recipient_email: '',
+          title: 'Pengajuan Pencairan Ditolak Kepsek',
+          message: `Pengajuan pencairan Anda periode ${target.month}/${target.year} tidak disetujui Kepala Sekolah.${note ? ` Alasan: ${note}` : ''}`,
+          type: 'disbursement_rejected',
+          ref_id: target.id,
+          is_read: false,
+          created_at: nowIso,
+        });
+      } else {
+        target.status = 'approved';
+        target.kepsek_note = note;
+        target.kepsek_reviewed_at = nowIso;
+        target.slip_issued_at = nowIso;
+
+        const slipId = generateUuidV4();
+        target.issued_slip_id = slipId;
+
+        let baseDetails = {};
+        try {
+          baseDetails = JSON.parse(target.issued_slip_json || '{}');
+        } catch {
+          baseDetails = {};
+        }
+
+        const priorApprovedTotal = (db.Disbursement_Requests || [])
+          .filter(
+            (r) =>
+              r.id !== target.id &&
+              r.teacher_id === target.teacher_id &&
+              normalizePeriodKey(r.month) === normalizePeriodKey(target.month) &&
+              Number(r.year) === Number(target.year) &&
+              r.status === 'approved'
+          )
+          .reduce((s, r) => s + Number(r.approved_amount || 0), 0);
+
+        const approvedAmt = Number(target.approved_amount || target.requested_amount || 0);
+        const estNet = Number(target.estimated_net_salary || approvedAmt);
+        const remainingEst = Math.max(0, estNet - priorApprovedTotal - approvedAmt);
+
+        const slipDetails = {
+          ...baseDetails,
+          slip_type: 'disbursement',
+          disbursement_request_id: target.id,
+          request_scope: target.request_scope,
+          disbursement_timing: target.disbursement_timing,
+          estimated_net_salary: estNet,
+          approved_amount: approvedAmt,
+          remaining_estimated_salary: remainingEst,
+          treasurer_note: target.treasurer_note || '',
+          kepsek_note: note,
+          slip_issued_at: nowIso,
+          net_salary: approvedAmt,
+        };
+        target.issued_slip_json = JSON.stringify(slipDetails);
+
+        db.Notifications.unshift(
+          {
+            id: generateUuidV4(),
+            recipient_role: 'guru',
+            recipient_teacher_id: target.teacher_id,
+            recipient_email: '',
+            title: 'Slip Gaji Pencairan Resmi Terbit!',
+            message: `Pengajuan pencairan periode ${target.month}/${target.year} sebesar Rp ${approvedAmt.toLocaleString('id-ID')} telah disetujui Bendahara & Kepsek. Slip Gaji siap diunduh.`,
+            type: 'disbursement_issued',
+            ref_id: target.id,
+            is_read: false,
+            created_at: nowIso,
+          },
+          {
+            id: generateUuidV4(),
+            recipient_role: 'admin',
+            recipient_teacher_id: '',
+            recipient_email: '',
+            title: `Slip Pencairan Terbit: ${target.teacher_name}`,
+            message: `Kepsek telah menyetujui pencairan ${target.teacher_name} sebesar Rp ${approvedAmt.toLocaleString('id-ID')}. Slip resmi otomatis diterbitkan ke PTK.`,
+            type: 'disbursement_issued',
+            ref_id: target.id,
+            is_read: false,
+            created_at: nowIso,
+          }
+        );
+      }
+
+      saveDb(db);
+      return { ok: true, status: 200, data: target };
+    }
+
+    case 'notifications.list': {
+      const allNotifs = [...(db.Notifications || [])];
+      let filtered = [];
+      if (session.role === 'admin' || session.role === 'kepsek') {
+        filtered = allNotifs.filter((n) => n.recipient_role === session.role);
+      } else if (session.role === 'guru') {
+        const own = getOwnedTeacher();
+        filtered = allNotifs.filter(
+          (n) => n.recipient_role === 'guru' && own && n.recipient_teacher_id === own.id
+        );
+      }
+      filtered.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+      const unreadCount = filtered.filter((n) => !n.is_read).length;
+      return {
+        ok: true,
+        status: 200,
+        data: { items: filtered.slice(0, 40), unreadCount },
+      };
+    }
+
+    case 'notifications.markRead': {
+      const own = session.role === 'guru' ? getOwnedTeacher() : null;
+      (db.Notifications || []).forEach((n) => {
+        const belongsToUser =
+          session.role === 'guru'
+            ? n.recipient_role === 'guru' && own && n.recipient_teacher_id === own.id
+            : n.recipient_role === session.role;
+        if (!belongsToUser) return;
+        if (payload.mark_all || (payload.id && n.id === payload.id)) {
+          n.is_read = true;
+        }
+      });
+      saveDb(db);
+      return { ok: true, status: 200, data: { updated: true } };
     }
 
     case 'schoolProfile.update': {

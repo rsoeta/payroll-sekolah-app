@@ -1,5 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
+  Bell,
+  CheckCheck,
   ChevronRight,
   Download,
   LogOut,
@@ -12,7 +14,9 @@ import {
   UserCheck,
   X,
 } from 'lucide-react';
-import { isLiveGasMode } from '../services/gasApi';
+import api, { isLiveGasMode } from '../services/gasApi';
+import notify from '../utils/notify';
+import { formatIsoDateTimeIndo } from '../utils/disbursementHelpers';
 import {
   getSchoolProfile,
   subscribeSchoolProfile,
@@ -53,6 +57,11 @@ export function AppShell({
   const [pwaGuideOpen, setPwaGuideOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [unreadCount, setUnreadCount] = useState(0);
+  const prevUnreadRef = useRef(0);
+  const notifBoxRef = useRef(null);
 
   const [schoolProfile, setSchoolProfile] = useState(() => getSchoolProfile());
   const [themePref, setThemePref] = useState(() => getThemePreference());
@@ -140,6 +149,87 @@ export function AppShell({
 
   const handleToggleRail = () => {
     applyRail(!railCollapsed);
+  };
+
+  const loadNotifications = useCallback(
+    async (announceNew = false) => {
+      if (!user) {
+        setNotifications([]);
+        setUnreadCount(0);
+        prevUnreadRef.current = 0;
+        return;
+      }
+      try {
+        const res = await api.get('notifications.list');
+        const items = Array.isArray(res?.items) ? res.items : [];
+        const nextUnread = Number(res?.unreadCount || 0);
+        if (announceNew && nextUnread > prevUnreadRef.current && items.length > 0) {
+          const newest = items.find((it) => !it.is_read) || items[0];
+          if (newest?.title) {
+            notify.info(newest.title);
+          }
+        }
+        prevUnreadRef.current = nextUnread;
+        setNotifications(items);
+        setUnreadCount(nextUnread);
+      } catch {
+        // Silent background polling failure
+      }
+    },
+    [user]
+  );
+
+  useEffect(() => {
+    loadNotifications(false);
+    if (!user) return undefined;
+    const timer = setInterval(() => {
+      loadNotifications(true);
+    }, 20000);
+    return () => clearInterval(timer);
+  }, [user, activeTab, loadNotifications]);
+
+  useEffect(() => {
+    if (!notifOpen) return undefined;
+    const handleOutside = (e) => {
+      if (notifBoxRef.current && !notifBoxRef.current.contains(e.target)) {
+        setNotifOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [notifOpen]);
+
+  const handleMarkAllRead = async () => {
+    try {
+      await api.put('notifications.markRead', { mark_all: true });
+      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
+      setUnreadCount(0);
+      prevUnreadRef.current = 0;
+    } catch {
+      // Ignore
+    }
+  };
+
+  const handleNotificationClick = async (notifItem) => {
+    if (!notifItem.is_read) {
+      api.put('notifications.markRead', { id: notifItem.id }).catch(() => {});
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notifItem.id ? { ...n, is_read: true } : n))
+      );
+      setUnreadCount((c) => {
+        const next = Math.max(0, c - 1);
+        prevUnreadRef.current = next;
+        return next;
+      });
+    }
+    setNotifOpen(false);
+    if (String(notifItem.type || '').startsWith('disbursement_')) {
+      if (notifItem.type === 'disbursement_issued' && user?.role === 'guru') {
+        onTabChange?.('slips');
+      } else {
+        onTabChange?.('disbursements');
+      }
+    }
   };
 
   const isAdmin = user?.role === 'admin';
@@ -387,6 +477,104 @@ export function AppShell({
                     <Moon className="h-4 w-4 text-[var(--accent-text)]" />
                   )}
                 </button>
+
+                {user && (
+                  <div className="relative" ref={notifBoxRef}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNotifOpen((prev) => !prev);
+                        if (!notifOpen) loadNotifications(false);
+                      }}
+                      title="Notifikasi Aplikasi"
+                      aria-label="Notifikasi Aplikasi"
+                      className="nim-ibtn relative"
+                    >
+                      <Bell className="h-4 w-4" />
+                      {unreadCount > 0 && (
+                        <span
+                          className="absolute -top-1 -right-1 flex h-4 min-w-[16px] items-center justify-center rounded-full px-1 text-[10px] font-bold text-white shadow-sm"
+                          style={{ background: '#ef4444' }}
+                        >
+                          {unreadCount > 9 ? '9+' : unreadCount}
+                        </span>
+                      )}
+                    </button>
+
+                    {notifOpen && (
+                      <div
+                        className="nim-panel absolute right-0 mt-2 w-[310px] sm:w-[360px] rounded-2xl p-3 shadow-2xl z-50"
+                        style={{
+                          boxShadow:
+                            '0 18px 40px -12px rgba(0, 0, 0, 0.35), inset 0 0 0 1px var(--line-2)',
+                        }}
+                      >
+                        <div
+                          className="flex items-center justify-between gap-2 pb-2 mb-2"
+                          style={{ borderBottom: '1px solid var(--line)' }}
+                        >
+                          <div className="flex items-center gap-1.5">
+                            <Bell className="h-3.5 w-3.5 text-[var(--accent-text)]" />
+                            <span className="text-xs font-bold text-[var(--ink)]">
+                              Notifikasi ({unreadCount} baru)
+                            </span>
+                          </div>
+                          {unreadCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={handleMarkAllRead}
+                              className="nim-btn nim-btn--ghost nim-btn--sm text-[11px]"
+                            >
+                              <CheckCheck className="h-3 w-3" />
+                              <span>Tandai Dibaca</span>
+                            </button>
+                          )}
+                        </div>
+
+                        {notifications.length === 0 ? (
+                          <p className="py-6 text-center text-xs text-[var(--muted)]">
+                            Belum ada notifikasi aktivitas.
+                          </p>
+                        ) : (
+                          <div className="max-h-72 overflow-y-auto space-y-1.5 pr-0.5">
+                            {notifications.map((n) => (
+                              <button
+                                key={n.id}
+                                type="button"
+                                onClick={() => handleNotificationClick(n)}
+                                className="w-full text-left rounded-xl p-2.5 transition-colors"
+                                style={{
+                                  background: n.is_read ? 'transparent' : 'var(--accent-soft)',
+                                  boxShadow: n.is_read
+                                    ? 'inset 0 0 0 1px var(--line)'
+                                    : 'inset 0 0 0 1px var(--accent-glow)',
+                                }}
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <span className="text-xs font-bold text-[var(--ink)] leading-snug">
+                                    {n.title}
+                                  </span>
+                                  {!n.is_read && (
+                                    <span
+                                      className="mt-1 h-2 w-2 rounded-full shrink-0"
+                                      style={{ background: 'var(--accent)' }}
+                                    />
+                                  )}
+                                </div>
+                                <p className="mt-1 text-[11px] text-[var(--ink-2)] leading-relaxed">
+                                  {n.message}
+                                </p>
+                                <span className="mt-1 block text-[10px] text-[var(--muted)]">
+                                  {formatIsoDateTimeIndo(n.created_at)}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {isAdmin && (
                   <button

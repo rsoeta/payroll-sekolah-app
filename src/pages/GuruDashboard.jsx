@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import {
+  Banknote,
   FileDown,
   ShieldCheck,
   Wallet,
@@ -20,9 +21,14 @@ import {
   resolveInfaqZakatAmount,
 } from '../utils/formatters';
 import { formatAttendanceNumber } from '../utils/attendanceHelpers';
+import {
+  getDisbursementScopeMeta,
+  getDisbursementTimingMeta,
+} from '../utils/disbursementHelpers';
 import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
 import FloatingTabBar from '../components/FloatingTabBar';
 import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
+import DisbursementRequestSection from '../components/DisbursementRequestSection';
 
 const SLIP_STATUS_META = {
   draft: {
@@ -74,13 +80,15 @@ export function GuruDashboard({
   const [summary, setSummary] = useState(null);
   const [slips, setSlips] = useState([]);
   const [attendanceLogCount, setAttendanceLogCount] = useState(0);
+  const [disbursementRequestsCount, setDisbursementRequestsCount] = useState(0);
+  const [disbursementTargetPeriod, setDisbursementTargetPeriod] = useState(null);
   const [loading, setLoading] = useState(false);
 
   const loadGuruData = useCallback(async () => {
     setLoading(true);
     try {
       const now = new Date();
-      const [sumData, mySlips, myLogs] = await Promise.all([
+      const [sumData, mySlips, myLogs, myDisbReqs] = await Promise.all([
         api.get('dashboard.summary'),
         api.get('payslips.myList'),
         api
@@ -89,10 +97,16 @@ export function GuruDashboard({
             year: now.getFullYear(),
           })
           .catch(() => []),
+        api.get('disbursements.list').catch(() => []),
       ]);
       setSummary(sumData);
       setSlips(mySlips || []);
       setAttendanceLogCount(Array.isArray(myLogs) ? myLogs.length : 0);
+      setDisbursementRequestsCount(
+        Array.isArray(myDisbReqs)
+          ? myDisbReqs.filter((r) => r.status !== 'rejected' && r.status !== 'approved').length
+          : 0
+      );
     } catch (err) {
       notify.error(err.message || 'Gagal memuat slip gaji.');
     } finally {
@@ -108,8 +122,9 @@ export function GuruDashboard({
     onBadgesChange?.({
       slips: slips.length,
       attendance: attendanceLogCount > 0 ? attendanceLogCount : undefined,
+      disbursements: disbursementRequestsCount > 0 ? disbursementRequestsCount : undefined,
     });
-  }, [slips.length, attendanceLogCount, onBadgesChange]);
+  }, [slips.length, attendanceLogCount, disbursementRequestsCount, onBadgesChange]);
 
   useEffect(() => {
     if (!onSearchItemsChange) return;
@@ -121,6 +136,14 @@ export function GuruDashboard({
         sub: 'Input hadir, tugas (0,5), sakit/izin & JTM harian',
         icon: CalendarCheck,
         run: () => setActiveTab('attendance'),
+      },
+      {
+        id: 'guru-tab:disbursements',
+        group: 'Menu Portal Guru',
+        title: 'Ajukan Pencairan Estimasi Gaji',
+        sub: 'Pengajuan pencairan sebagian/penuh sebelum waktunya atau kolektif',
+        icon: Banknote,
+        run: () => setActiveTab('disbursements'),
       },
       ...slips.map((slip) => ({
         id: `slip:${slip.id}`,
@@ -157,6 +180,11 @@ export function GuruDashboard({
           title: 'Kehadiran Per-Kelas & JTM',
           desc: 'Centang kelas yang diampu (Hadir = 1, Tugas = 0,5, Sakit/Izin = 0) untuk disinkronkan otomatis ke Bendahara.',
         }
+      : activeTab === 'disbursements'
+      ? {
+          title: 'Pengajuan Pencairan Estimasi Gaji',
+          desc: 'Ajukan pencairan sebagian atau seluruh estimasi gaji Anda (awal waktu maupun kolektif tepat waktu).',
+        }
       : activeTab === 'profile'
       ? {
           title: 'Profil Pendidik',
@@ -180,8 +208,28 @@ export function GuruDashboard({
         <div className="flex flex-wrap items-center gap-2">
           <button
             type="button"
+            onClick={() => setActiveTab(activeTab === 'disbursements' ? 'slips' : 'disbursements')}
+            className={`nim-btn text-xs ${
+              activeTab === 'disbursements' ? '' : 'nim-btn--primary'
+            }`}
+          >
+            {activeTab === 'disbursements' ? (
+              <>
+                <Wallet className="h-3.5 w-3.5" />
+                <span>Lihat Slip Gaji</span>
+              </>
+            ) : (
+              <>
+                <Banknote className="h-3.5 w-3.5" />
+                <span>Ajukan Pencairan</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab(activeTab === 'attendance' ? 'slips' : 'attendance')}
-            className="nim-btn nim-btn--primary text-xs"
+            className="nim-btn text-xs"
           >
             {activeTab === 'attendance' ? (
               <>
@@ -284,6 +332,24 @@ export function GuruDashboard({
         </div>
       </motion.section>
 
+      {/* Disbursement Request Section */}
+      {activeTab === 'disbursements' && (
+        <motion.section
+          key="guru-disbursements"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <DisbursementRequestSection
+            teacherProfile={teacherProfile}
+            initialPeriod={disbursementTargetPeriod}
+            onDisbursementChange={() => {
+              loadGuruData();
+            }}
+          />
+        </motion.section>
+      )}
+
       {/* Self Attendance & JTM Section */}
       {activeTab === 'attendance' && (
         <motion.section
@@ -343,7 +409,23 @@ export function GuruDashboard({
               } catch {
                 d = {};
               }
-              const statusMeta = SLIP_STATUS_META[slip.payroll_status] || SLIP_STATUS_META.approved;
+              const isDisbursementSlip =
+                slip.slip_type === 'disbursement' || d.slip_type === 'disbursement';
+              const statusMeta = isDisbursementSlip
+                ? {
+                    badgeLabel: `Slip Pencairan Resmi (${
+                      getDisbursementScopeMeta(d.request_scope || slip.request_scope).shortLabel
+                    })`,
+                    badgeCls: 'nim-badge nim-badge--good',
+                    isEstimate: false,
+                    netLabel: 'Nominal Pencairan Disetujui',
+                    btnLabel: 'Unduh Slip Pencairan (PDF)',
+                    note: `Dicairkan (${
+                      getDisbursementTimingMeta(d.disbursement_timing || slip.disbursement_timing)
+                        .label
+                    }) — disetujui oleh Bendahara & Kepala Sekolah.`,
+                  }
+                : SLIP_STATUS_META[slip.payroll_status] || SLIP_STATUS_META.approved;
 
               return (
                 <div
@@ -446,6 +528,31 @@ export function GuruDashboard({
                       })()}
                     </div>
 
+                    {isDisbursementSlip && (
+                      <div
+                        className="rounded-xl px-3.5 py-2.5 text-xs space-y-1"
+                        style={{
+                          background: 'var(--good-soft)',
+                          boxShadow: 'inset 0 0 0 1px var(--good-line)',
+                        }}
+                      >
+                        <div className="flex justify-between">
+                          <span className="text-[var(--ink-2)]">Estimasi Gaji Bersih Penuh</span>
+                          <span className="font-semibold text-[var(--ink)] tabular-nums">
+                            {formatRupiah(d.estimated_net_salary || slip.net_salary)}
+                          </span>
+                        </div>
+                        {Number(d.remaining_estimated_salary || 0) > 0 && (
+                          <div className="flex justify-between">
+                            <span className="text-[var(--ink-2)]">Sisa Estimasi Belum Dicairkan</span>
+                            <span className="font-semibold text-[var(--accent-text)] tabular-nums">
+                              {formatRupiah(d.remaining_estimated_salary)}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+
                     <div
                       className="flex items-center justify-between rounded-xl px-4 py-3"
                       style={{
@@ -479,7 +586,21 @@ export function GuruDashboard({
                     </div>
                   </div>
 
-                  <div className="flex justify-end pt-1">
+                  <div className="flex flex-wrap items-center justify-end gap-2 pt-1">
+                    {statusMeta.isEstimate && !isDisbursementSlip && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDisbursementTargetPeriod({ month: slip.month, year: slip.year });
+                          setActiveTab('disbursements');
+                        }}
+                        className="nim-btn nim-btn--primary"
+                      >
+                        <Banknote className="h-3.5 w-3.5" />
+                        <span>Ajukan Pencairan</span>
+                      </button>
+                    )}
+
                     <button
                       type="button"
                       onClick={() => handleDownloadPdf(slip)}
@@ -503,14 +624,20 @@ export function GuruDashboard({
         activeTab={activeTab}
         onChange={setActiveTab}
         tabs={[
-          { id: 'slips', label: 'Slip Gaji Digital', icon: Wallet, badge: slips.length },
+          { id: 'slips', label: 'Slip Gaji', icon: Wallet, badge: slips.length },
+          {
+            id: 'disbursements',
+            label: 'Pencairan',
+            icon: Banknote,
+            badge: disbursementRequestsCount > 0 ? disbursementRequestsCount : undefined,
+          },
           {
             id: 'attendance',
-            label: 'Kehadiran & JTM',
+            label: 'Kehadiran',
             icon: CalendarCheck,
             badge: attendanceLogCount > 0 ? attendanceLogCount : undefined,
           },
-          { id: 'profile', label: 'Profil Saya', icon: ShieldCheck },
+          { id: 'profile', label: 'Profil', icon: ShieldCheck },
         ]}
       />
     </main>

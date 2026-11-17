@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
+  Banknote,
+  Bell,
   CheckCircle2,
   RotateCcw,
   Eye,
@@ -23,6 +25,7 @@ import {
 } from '../utils/formatters';
 import ConfirmModal from '../components/ConfirmModal';
 import FloatingTabBar from '../components/FloatingTabBar';
+import DisbursementApprovalPanel from '../components/DisbursementApprovalPanel';
 
 const STATUS_META = {
   draft: { label: 'Draf Bendahara', cls: 'nim-badge' },
@@ -49,6 +52,7 @@ export function KepsekDashboard({
   const setActiveTab = onTabChange ?? setInternalTab;
 
   const [payrolls, setPayrolls] = useState([]);
+  const [disbursementRequests, setDisbursementRequests] = useState([]);
   const [teachersCount, setTeachersCount] = useState(0);
   const [selectedPayroll, setSelectedPayroll] = useState(null);
   const [details, setDetails] = useState([]);
@@ -62,12 +66,14 @@ export function KepsekDashboard({
 
   const loadData = useCallback(async () => {
     try {
-      const [payrollList, summary] = await Promise.all([
+      const [payrollList, summary, disbList] = await Promise.all([
         api.get('payrolls.list'),
         api.get('dashboard.summary'),
+        api.get('disbursements.list').catch(() => []),
       ]);
       setPayrolls(payrollList || []);
       setTeachersCount(summary?.totalTeachers || 0);
+      setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
     } catch (err) {
       notify.error(err.message || 'Gagal memuat dasbor Kepala Sekolah.');
     }
@@ -88,10 +94,16 @@ export function KepsekDashboard({
   }, []);
 
   const pendingList = payrolls.filter((p) => p.status === 'submitted');
+  const pendingKepsekDisbCount = disbursementRequests.filter(
+    (r) => r.status === 'approved_treasurer'
+  ).length;
 
   useEffect(() => {
-    onBadgesChange?.({ submitted: pendingList.length });
-  }, [pendingList.length, onBadgesChange]);
+    onBadgesChange?.({
+      submitted: pendingList.length,
+      disbursements: pendingKepsekDisbCount > 0 ? pendingKepsekDisbCount : undefined,
+    });
+  }, [pendingList.length, pendingKepsekDisbCount, onBadgesChange]);
 
   useEffect(() => {
     if (!onSearchItemsChange) return;
@@ -210,6 +222,39 @@ export function KepsekDashboard({
         </div>
       </section>
 
+      {/* Alert Banner when Disbursements approved by Treasurer await Kepsek authorization */}
+      {pendingKepsekDisbCount > 0 && activeTab !== 'disbursements' && (
+        <div
+          className="nim-glass rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
+          style={{
+            background: 'var(--accent-soft)',
+            boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="nim-kpi__ico !w-8 !h-8">
+              <Bell className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-xs sm:text-sm font-bold text-[var(--ink)]">
+                Ada {pendingKepsekDisbCount} Pengajuan Pencairan PTK Disetujui Bendahara
+              </p>
+              <p className="text-[11px] text-[var(--ink-2)]">
+                Berikan otorisasi akhir agar Slip Gaji Pencairan Resmi segera terbit ke PTK.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('disbursements')}
+            className="nim-btn nim-btn--primary nim-btn--sm"
+          >
+            <Banknote className="h-3.5 w-3.5" />
+            <span>Tinjau Pencairan PTK ({pendingKepsekDisbCount})</span>
+          </button>
+        </div>
+      )}
+
       {/* Pending Approvals Highlight */}
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -239,6 +284,12 @@ export function KepsekDashboard({
               { id: 'all', label: 'Semua Periode', icon: Wallet },
               { id: 'submitted', label: 'Perlu Otorisasi', icon: Clock, badge: pendingList.length },
               { id: 'approved', label: 'Telah Disetujui', icon: CheckCircle2 },
+              {
+                id: 'disbursements',
+                label: 'Pencairan PTK',
+                icon: Banknote,
+                badge: pendingKepsekDisbCount,
+              },
             ].map((tabItem) => {
               const TabIcon = tabItem.icon;
               const isTabActive = activeTab === tabItem.id;
@@ -284,79 +335,87 @@ export function KepsekDashboard({
           </div>
         </div>
 
-        <AnimatePresence mode="wait">
-          <motion.div
-            key={activeTab}
-            initial={{ opacity: 0, y: 8 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -6 }}
-            transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-            className="fluid-container"
-          >
-            {filteredPayrolls.map((pr) => {
-              const meta = STATUS_META[pr.status] || STATUS_META.draft;
-              return (
-                <div
-                  key={pr.id}
-                  className="fluid-item nim-glass nim-card flex flex-col justify-between gap-4"
-                >
-                  <div>
-                    <div className="flex items-center justify-between gap-2">
-                      <h3 className="text-lg font-bold text-[var(--ink)]">
-                        {getMonthName(pr.month)} {pr.year}
-                      </h3>
-                      <span className={meta.cls}>{meta.label}</span>
-                    </div>
-                    <p className="mt-1 text-xs text-[var(--muted)]">Total pengajuan anggaran gaji</p>
-                    <p className="mt-3 text-xl sm:text-2xl font-bold text-[var(--ink)] tabular-nums">
-                      {formatRupiah(pr.total_budget)}
-                    </p>
-                  </div>
-
+        {activeTab === 'disbursements' ? (
+          <DisbursementApprovalPanel
+            role="kepsek"
+            requests={disbursementRequests}
+            onRefresh={loadData}
+          />
+        ) : (
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={activeTab}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -6 }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+              className="fluid-container"
+            >
+              {filteredPayrolls.map((pr) => {
+                const meta = STATUS_META[pr.status] || STATUS_META.draft;
+                return (
                   <div
-                    className="flex flex-wrap items-center justify-end gap-1.5 pt-3"
-                    style={{ borderTop: '1px solid var(--line)' }}
+                    key={pr.id}
+                    className="fluid-item nim-glass nim-card flex flex-col justify-between gap-4"
                   >
-                    <button
-                      type="button"
-                      onClick={() => handleInspect(pr)}
-                      className="nim-btn"
+                    <div>
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-lg font-bold text-[var(--ink)]">
+                          {getMonthName(pr.month)} {pr.year}
+                        </h3>
+                        <span className={meta.cls}>{meta.label}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-[var(--muted)]">Total pengajuan anggaran gaji</p>
+                      <p className="mt-3 text-xl sm:text-2xl font-bold text-[var(--ink)] tabular-nums">
+                        {formatRupiah(pr.total_budget)}
+                      </p>
+                    </div>
+
+                    <div
+                      className="flex flex-wrap items-center justify-end gap-1.5 pt-3"
+                      style={{ borderTop: '1px solid var(--line)' }}
                     >
-                      <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
-                      <span>Periksa Rincian</span>
-                    </button>
+                      <button
+                        type="button"
+                        onClick={() => handleInspect(pr)}
+                        className="nim-btn"
+                      >
+                        <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
+                        <span>Periksa Rincian</span>
+                      </button>
 
-                    {pr.status === 'submitted' && (
-                      <>
-                        <button
-                          type="button"
-                          onClick={() => triggerApproval(pr, 'draft')}
-                          className="nim-btn nim-btn--danger"
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" />
-                          <span>Revisi</span>
-                        </button>
+                      {pr.status === 'submitted' && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => triggerApproval(pr, 'draft')}
+                            className="nim-btn nim-btn--danger"
+                          >
+                            <RotateCcw className="h-3.5 w-3.5" />
+                            <span>Revisi</span>
+                          </button>
 
-                        <button
-                          type="button"
-                          onClick={() => triggerApproval(pr, 'approved')}
-                          className="nim-btn nim-btn--good"
-                        >
-                          <CheckCircle2 className="h-3.5 w-3.5" />
-                          <span>Setujui</span>
-                        </button>
-                      </>
-                    )}
+                          <button
+                            type="button"
+                            onClick={() => triggerApproval(pr, 'approved')}
+                            className="nim-btn nim-btn--good"
+                          >
+                            <CheckCircle2 className="h-3.5 w-3.5" />
+                            <span>Setujui</span>
+                          </button>
+                        </>
+                      )}
+                    </div>
                   </div>
-                </div>
-              );
-            })}
-          </motion.div>
-        </AnimatePresence>
+                );
+              })}
+            </motion.div>
+          </AnimatePresence>
+        )}
       </section>
 
       {/* Breakdown Inspector */}
-      {selectedPayroll && (
+      {activeTab !== 'disbursements' && selectedPayroll && (
         <section className="nim-glass nim-card space-y-4">
           <div
             className="flex items-center justify-between pb-3"
@@ -496,9 +555,15 @@ export function KepsekDashboard({
         activeTab={activeTab}
         onChange={setActiveTab}
         tabs={[
-          { id: 'all', label: 'Semua Periode', icon: Wallet },
-          { id: 'submitted', label: 'Perlu Otorisasi', icon: Clock, badge: pendingList.length },
-          { id: 'approved', label: 'Telah Disetujui', icon: CheckCircle2 },
+          { id: 'all', label: 'Semua', icon: Wallet },
+          { id: 'submitted', label: 'Otorisasi', icon: Clock, badge: pendingList.length },
+          {
+            id: 'disbursements',
+            label: 'Pencairan PTK',
+            icon: Banknote,
+            badge: pendingKepsekDisbCount > 0 ? pendingKepsekDisbCount : undefined,
+          },
+          { id: 'approved', label: 'Disetujui', icon: CheckCircle2 },
         ]}
       />
     </main>

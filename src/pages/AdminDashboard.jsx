@@ -22,6 +22,8 @@ import {
   ClipboardList,
   Check,
   Ban,
+  Banknote,
+  Bell,
 } from 'lucide-react';
 import api from '../services/gasApi';
 import notify from '../utils/notify';
@@ -57,6 +59,7 @@ import TeacherImportModal, {
 import TeacherFormModal from '../components/TeacherFormModal';
 import FloatingTabBar from '../components/FloatingTabBar';
 import SchoolProfileSection from '../components/SchoolProfileSection';
+import DisbursementApprovalPanel from '../components/DisbursementApprovalPanel';
 import { fetchSchoolProfileFromServer } from '../services/schoolProfileService';
 
 const STATUS_BADGE = {
@@ -86,6 +89,11 @@ const TAB_HEADER_META = {
     eyebrow: 'Identitas Dokumen & Portal',
     title: 'Profil Sekolah & Yayasan',
     desc: 'Sesuaikan kop sekolah, logo, dan penandatangan resmi pada Slip Gaji PDF.',
+  },
+  disbursements: {
+    eyebrow: 'Pengajuan Pencairan PTK',
+    title: 'Persetujuan Pencairan Estimasi Gaji PTK',
+    desc: 'Tinjau dan setujui pengajuan pencairan sebagian/penuh PTK (awal waktu maupun kolektif) sebelum otorisasi Kepsek.',
   },
 };
 
@@ -120,6 +128,7 @@ export function AdminDashboard({
   const [payrolls, setPayrolls] = useState([]);
   const [attendances, setAttendances] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
+  const [disbursementRequests, setDisbursementRequests] = useState([]);
   const [expandedLogTeacherIds, setExpandedLogTeacherIds] = useState({});
   const [validatingKey, setValidatingKey] = useState('');
   const [rejectNoteEdits, setRejectNoteEdits] = useState({});
@@ -157,16 +166,18 @@ export function AdminDashboard({
   const loadAllData = useCallback(async () => {
     setLoading(true);
     try {
-      const [teacherList, payrollList, attList, logList] = await Promise.all([
+      const [teacherList, payrollList, attList, logList, disbList] = await Promise.all([
         api.get('teachers.list'),
         api.get('payrolls.list'),
         api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
         api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }).catch(() => []),
+        api.get('disbursements.list').catch(() => []),
       ]);
       setTeachers(teacherList || []);
       setPayrolls(payrollList || []);
       setAttendances(attList || []);
       setAttendanceLogs(Array.isArray(logList) ? logList : []);
+      setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
 
       const nextAttMap = {};
       (teacherList || []).forEach((t) => {
@@ -208,9 +219,16 @@ export function AdminDashboard({
     fetchSchoolProfileFromServer();
   }, [loadAllData, refreshTrigger]);
 
+  const pendingDisbursementsCount = disbursementRequests.filter(
+    (r) => r.status === 'pending_treasurer'
+  ).length;
+
   useEffect(() => {
-    onBadgesChange?.({ teachers: teachers.length });
-  }, [teachers.length, onBadgesChange]);
+    onBadgesChange?.({
+      teachers: teachers.length,
+      disbursements: pendingDisbursementsCount > 0 ? pendingDisbursementsCount : undefined,
+    });
+  }, [teachers.length, pendingDisbursementsCount, onBadgesChange]);
 
   const openEditTeacherModal = useCallback((teacher) => {
     const comp = teacher.salary_component || {};
@@ -572,6 +590,42 @@ export function AdminDashboard({
         </div>
       </div>
 
+      {/* Notifikasi Pengajuan Pencairan Baru dari PTK */}
+      {pendingDisbursementsCount > 0 && activeTab !== 'disbursements' && (
+        <div
+          className="nim-glass rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
+          style={{
+            background: 'var(--warn-soft)',
+            boxShadow: 'inset 0 0 0 1px var(--warn-line)',
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <span
+              className="nim-kpi__ico !w-8 !h-8"
+              style={{ background: 'rgba(245, 158, 11, 0.22)', color: 'var(--warn-text)' }}
+            >
+              <Bell className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-xs sm:text-sm font-bold text-[var(--ink)]">
+                Ada {pendingDisbursementsCount} Pengajuan Pencairan Gaji PTK Baru Menunggu Persetujuan Bendahara
+              </p>
+              <p className="text-[11px] text-[var(--ink-2)]">
+                Periksa pengajuan pencairan sebagian/penuh agar dapat diteruskan ke Kepala Sekolah untuk penerbitan slip.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('disbursements')}
+            className="nim-btn nim-btn--warn nim-btn--sm"
+          >
+            <Banknote className="h-3.5 w-3.5" />
+            <span>Tinjau Pengajuan ({pendingDisbursementsCount})</span>
+          </button>
+        </div>
+      )}
+
       {/* Top KPI Summary Cards (Single Row on Mobile & Desktop) */}
       <section className="flex flex-nowrap items-stretch gap-2 sm:gap-4 w-full">
         <div className="flex-1 basis-0 nim-glass nim-kpi">
@@ -641,6 +695,12 @@ export function AdminDashboard({
             {[
               { id: 'payroll', label: 'Alur Penggajian', icon: Wallet },
               { id: 'attendance', label: 'Kehadiran & JTM', icon: CalendarCheck },
+              {
+                id: 'disbursements',
+                label: 'Pencairan PTK',
+                icon: Banknote,
+                badge: pendingDisbursementsCount,
+              },
               { id: 'teachers', label: 'Master PTK & Gaji', icon: Users },
               { id: 'school_profile', label: 'Profil Sekolah', icon: Building2 },
             ].map((tabItem) => {
@@ -670,6 +730,17 @@ export function AdminDashboard({
                   <span className="relative z-10 flex items-center gap-1.5">
                     <TabIcon className="h-3.5 w-3.5" />
                     <span>{tabItem.label}</span>
+                    {tabItem.badge > 0 && (
+                      <span
+                        className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                        style={{
+                          background: isTabActive ? 'rgba(255,255,255,0.22)' : 'var(--warn-soft)',
+                          color: isTabActive ? '#ffffff' : 'var(--warn-text)',
+                        }}
+                      >
+                        {tabItem.badge}
+                      </span>
+                    )}
                   </span>
                 </button>
               );
@@ -1782,7 +1853,16 @@ export function AdminDashboard({
             </section>
           )}
 
-          {/* TAB 4: PROFIL & IDENTITAS SEKOLAH */}
+          {/* TAB 4: PENGAJUAN PENCAIRAN PTK */}
+          {activeTab === 'disbursements' && (
+            <DisbursementApprovalPanel
+              role="admin"
+              requests={disbursementRequests}
+              onRefresh={loadAllData}
+            />
+          )}
+
+          {/* TAB 5: PROFIL & IDENTITAS SEKOLAH */}
           {activeTab === 'school_profile' && <SchoolProfileSection />}
         </motion.div>
       </AnimatePresence>
@@ -1830,9 +1910,15 @@ export function AdminDashboard({
         onChange={setActiveTab}
         tabs={[
           { id: 'payroll', label: 'Penggajian', icon: Wallet },
-          { id: 'attendance', label: 'Kehadiran & JTM', icon: CalendarCheck },
+          { id: 'attendance', label: 'Kehadiran', icon: CalendarCheck },
+          {
+            id: 'disbursements',
+            label: 'Pencairan',
+            icon: Banknote,
+            badge: pendingDisbursementsCount > 0 ? pendingDisbursementsCount : undefined,
+          },
           { id: 'teachers', label: 'Master PTK', icon: Users, badge: teachers.length },
-          { id: 'school_profile', label: 'Profil Sekolah', icon: Building2 },
+          { id: 'school_profile', label: 'Profil', icon: Building2 },
         ]}
       />
 

@@ -120,15 +120,31 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
     doc.text(addressLine.slice(0, 92), textStartX, 26.5);
   }
 
+  const isDisbursementSlip =
+    slipRecord.slip_type === 'disbursement' || details.slip_type === 'disbursement';
+  const disbursementScopeLabel =
+    details.request_scope === 'partial' ? 'SEBAGIAN' : 'SELURUHNYA';
+  const disbursementTimingLabel =
+    details.disbursement_timing === 'early' ? 'SEBELUM WAKTUNYA' : 'TEPAT WAKTU KOLEKTIF';
+  const approvedDisbursementAmount = Number(
+    details.approved_amount ?? slipRecord.approved_amount ?? netSalary
+  );
+  const fullEstimatedNet = Number(details.estimated_net_salary ?? netSalary);
+  const remainingEstimatedSalary = Math.max(
+    0,
+    Number(details.remaining_estimated_salary ?? fullEstimatedNet - approvedDisbursementAmount)
+  );
+
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(9.5);
   doc.setTextColor(255, 255, 255);
-  const slipStatusLabel =
-    slipRecord.payroll_status === 'draft'
-      ? 'ESTIMASI SLIP GAJI (DRAF)'
-      : slipRecord.payroll_status === 'submitted'
-      ? 'ESTIMASI SLIP GAJI (MENUNGGU KEPSEK)'
-      : 'SLIP GAJI RESMI';
+  const slipStatusLabel = isDisbursementSlip
+    ? `SLIP PENCAIRAN RESMI (${disbursementScopeLabel} • ${disbursementTimingLabel})`
+    : slipRecord.payroll_status === 'draft'
+    ? 'ESTIMASI SLIP GAJI (DRAF)'
+    : slipRecord.payroll_status === 'submitted'
+    ? 'ESTIMASI SLIP GAJI (MENUNGGU KEPSEK)'
+    : 'SLIP GAJI RESMI';
   doc.text(
     `${slipStatusLabel}  |  Periode: ${monthName} ${year}  |  Ref: ${String(slipRecord.id || 'DOC').slice(0, 8).toUpperCase()}`,
     textStartX,
@@ -252,21 +268,66 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
     );
   }
 
+  if (isDisbursementSlip) {
+    y += 10;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(10.5);
+    doc.setTextColor(30, 64, 175);
+    doc.text('C. RINCIAN PENCAIRAN GAJI YANG DISETUJUI', 15, y);
+    y += 4;
+    doc.setDrawColor(191, 219, 254);
+    doc.line(15, y, 195, y);
+
+    y += 7;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(9.5);
+    doc.setTextColor(15, 23, 42);
+    doc.text('Estimasi Gaji Bersih Periode', 20, y);
+    doc.text(formatRupiah(fullEstimatedNet), 190, y, { align: 'right' });
+
+    y += 6.5;
+    doc.text(`Jenis & Jadwal: ${disbursementScopeLabel} (${disbursementTimingLabel})`, 20, y);
+    doc.setFont('helvetica', 'bold');
+    doc.text(formatRupiah(approvedDisbursementAmount), 190, y, { align: 'right' });
+
+    if (remainingEstimatedSalary > 0) {
+      y += 6.5;
+      doc.setFont('helvetica', 'normal');
+      doc.text('Sisa Estimasi Belum Dicairkan', 20, y);
+      doc.text(formatRupiah(remainingEstimatedSalary), 190, y, { align: 'right' });
+    }
+  }
+
   // Net Salary Box
-  y += 13;
+  y += 11;
   doc.setFillColor(240, 253, 244);
   doc.setDrawColor(22, 163, 74);
   doc.roundedRect(15, y, 180, 19, 3, 3, 'FD');
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11.5);
+  doc.setFontSize(11);
   doc.setTextColor(20, 83, 45);
-  doc.text('TAKE HOME PAY (GAJI BERSIH DITERIMA)', 22, y + 12);
+  doc.text(
+    isDisbursementSlip
+      ? 'NOMINAL PENCAIRAN DISETUJUI (DITERIMA)'
+      : 'TAKE HOME PAY (GAJI BERSIH DITERIMA)',
+    22,
+    y + 12
+  );
   doc.setFontSize(13.5);
-  doc.text(formatRupiah(netSalary), 188, y + 12, { align: 'right' });
+  doc.text(
+    formatRupiah(isDisbursementSlip ? approvedDisbursementAmount : netSalary),
+    188,
+    y + 12,
+    { align: 'right' }
+  );
 
   // Official Signatories Block (Kepala Sekolah & Bendahara)
-  y += 28;
+  y += 26;
+  if (y > 245) {
+    doc.addPage();
+    y = 24;
+  }
   const formattedDate = new Date().toLocaleDateString('id-ID', {
     day: 'numeric',
     month: 'long',
@@ -318,5 +379,6 @@ export async function downloadPayslipPdf(slipRecord, customProfileOverride = nul
   );
 
   const safeNip = String(nip).replace(/[^a-zA-Z0-9_-]/g, '');
-  doc.save(`Slip_Gaji_${safeNip}_${monthName}_${year}.pdf`);
+  const filePrefix = isDisbursementSlip ? 'Slip_Pencairan' : 'Slip_Gaji';
+  doc.save(`${filePrefix}_${safeNip}_${monthName}_${year}.pdf`);
 }
