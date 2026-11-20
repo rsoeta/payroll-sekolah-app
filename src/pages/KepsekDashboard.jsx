@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Banknote,
@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Eye,
   FileDown,
+  Search,
   ShieldAlert,
   Wallet,
   Users,
@@ -34,7 +35,8 @@ import {
 import ConfirmModal from '../components/ConfirmModal';
 import FloatingTabBar from '../components/FloatingTabBar';
 import DisbursementApprovalPanel from '../components/DisbursementApprovalPanel';
-import { downloadBatchPayslipsPdf } from '../utils/pdfSlipGenerator';
+import PaginationBar from '../components/admin/PaginationBar';
+import { downloadBatchPayslipsPdf } from '../utils/pdfSlipLoader';
 
 const STATUS_META = {
   draft: { label: 'Draf Bendahara', cls: 'nim-badge' },
@@ -65,6 +67,12 @@ export function KepsekDashboard({
   const [teachersCount, setTeachersCount] = useState(0);
   const [selectedPayroll, setSelectedPayroll] = useState(null);
   const [details, setDetails] = useState([]);
+  const [payrollSearch, setPayrollSearch] = useState('');
+  const [payrollPage, setPayrollPage] = useState(1);
+  const [payrollPageSize, setPayrollPageSize] = useState(12);
+  const [detailSearch, setDetailSearch] = useState('');
+  const [detailPage, setDetailPage] = useState(1);
+  const [detailPageSize, setDetailPageSize] = useState(12);
   const [confirmModal, setConfirmModal] = useState({
     isOpen: false,
     title: '',
@@ -175,6 +183,8 @@ export function KepsekDashboard({
   const handleInspect = useCallback(async (pr) => {
     try {
       setSelectedPayroll(pr);
+      setDetailSearch('');
+      setDetailPage(1);
       const rows = await api.get('payrollDetails.byPayroll', { payroll_id: pr.id });
       setDetails(rows || []);
     } catch (err) {
@@ -243,11 +253,70 @@ export function KepsekDashboard({
     });
   };
 
-  const filteredPayrolls = payrolls.filter((p) => {
-    if (activeTab === 'submitted') return p.status === 'submitted';
-    if (activeTab === 'approved') return p.status === 'approved' || p.status === 'paid';
-    return true;
-  });
+  const filteredPayrolls = useMemo(() => {
+    const q = payrollSearch.trim().toLowerCase();
+    return payrolls.filter((p) => {
+      if (activeTab === 'submitted' && p.status !== 'submitted') return false;
+      if (activeTab === 'approved' && p.status !== 'approved' && p.status !== 'paid') return false;
+      if (!q) return true;
+      const periodLabel = `${getMonthName(p.month)} ${p.year}`.toLowerCase();
+      const statusLabel = (STATUS_META[p.status]?.label || p.status || '').toLowerCase();
+      return (
+        periodLabel.includes(q) ||
+        String(p.year || '').includes(q) ||
+        statusLabel.includes(q)
+      );
+    });
+  }, [payrolls, activeTab, payrollSearch]);
+
+  useEffect(() => {
+    setPayrollPage(1);
+  }, [activeTab, payrollSearch, payrollPageSize]);
+
+  const totalPayrollPages = Math.max(1, Math.ceil(filteredPayrolls.length / payrollPageSize));
+  const safePayrollPage = Math.min(payrollPage, totalPayrollPages);
+  const pagedPayrolls = useMemo(() => {
+    const start = (safePayrollPage - 1) * payrollPageSize;
+    return filteredPayrolls.slice(start, start + payrollPageSize);
+  }, [filteredPayrolls, safePayrollPage, payrollPageSize]);
+
+  const parsedDetails = useMemo(
+    () =>
+      details.map((row) => {
+        let parsed = {};
+        try {
+          parsed = JSON.parse(row.details_json || '{}');
+        } catch {
+          parsed = {};
+        }
+        return { row, d: parsed };
+      }),
+    [details]
+  );
+
+  const filteredDetails = useMemo(() => {
+    const q = detailSearch.trim().toLowerCase();
+    if (!q) return parsedDetails;
+    return parsedDetails.filter(({ d }) => {
+      const cat = getStaffCategoryLabel(d).toLowerCase();
+      return (
+        String(d.teacher_name || '').toLowerCase().includes(q) ||
+        String(d.nip || '').toLowerCase().includes(q) ||
+        cat.includes(q)
+      );
+    });
+  }, [parsedDetails, detailSearch]);
+
+  useEffect(() => {
+    setDetailPage(1);
+  }, [selectedPayroll?.id, detailSearch, detailPageSize]);
+
+  const totalDetailPages = Math.max(1, Math.ceil(filteredDetails.length / detailPageSize));
+  const safeDetailPage = Math.min(detailPage, totalDetailPages);
+  const pagedDetails = useMemo(() => {
+    const start = (safeDetailPage - 1) * detailPageSize;
+    return filteredDetails.slice(start, start + detailPageSize);
+  }, [filteredDetails, safeDetailPage, detailPageSize]);
 
   return (
     <main className="space-y-6">
@@ -432,75 +501,117 @@ export function KepsekDashboard({
             onRefresh={() => refreshDomains(['disbursements'])}
           />
         ) : (
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeTab}
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
-              className="fluid-container"
-            >
-              {filteredPayrolls.map((pr) => {
-                const meta = STATUS_META[pr.status] || STATUS_META.draft;
-                return (
-                  <div
-                    key={pr.id}
-                    className="fluid-item nim-glass nim-card flex flex-col justify-between gap-4"
-                  >
-                    <div>
-                      <div className="flex items-center justify-between gap-2">
-                        <h3 className="text-lg font-bold text-[var(--ink)]">
-                          {getMonthName(pr.month)} {pr.year}
-                        </h3>
-                        <span className={meta.cls}>{meta.label}</span>
-                      </div>
-                      <p className="mt-1 text-xs text-[var(--muted)]">Total pengajuan anggaran gaji</p>
-                      <p className="mt-3 text-xl sm:text-2xl font-bold text-[var(--ink)] tabular-nums">
-                        {formatRupiah(pr.total_budget)}
-                      </p>
-                    </div>
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="relative flex-1 min-w-[210px] max-w-sm">
+                <Search className="h-3.5 w-3.5 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={payrollSearch}
+                  onChange={(e) => setPayrollSearch(e.target.value)}
+                  placeholder="Cari bulan, tahun, atau status..."
+                  className="nim-input !pl-8 !py-1.5 text-xs w-full"
+                />
+              </div>
+              {payrollSearch && (
+                <button
+                  type="button"
+                  onClick={() => setPayrollSearch('')}
+                  className="nim-btn nim-btn--sm"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
 
-                    <div
-                      className="flex flex-wrap items-center justify-end gap-1.5 pt-3"
-                      style={{ borderTop: '1px solid var(--line)' }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => handleInspect(pr)}
-                        className="nim-btn"
+            {filteredPayrolls.length === 0 ? (
+              <div className="nim-glass nim-card p-6 text-center text-xs text-[var(--muted)]">
+                Tidak ada periode penggajian yang sesuai filter.
+              </div>
+            ) : (
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={`${activeTab}-${safePayrollPage}`}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -6 }}
+                  transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+                  className="fluid-container"
+                >
+                  {pagedPayrolls.map((pr) => {
+                    const meta = STATUS_META[pr.status] || STATUS_META.draft;
+                    return (
+                      <div
+                        key={pr.id}
+                        className="fluid-item nim-glass nim-card flex flex-col justify-between gap-4"
                       >
-                        <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
-                        <span>Periksa Rincian</span>
-                      </button>
+                        <div>
+                          <div className="flex items-center justify-between gap-2">
+                            <h3 className="text-lg font-bold text-[var(--ink)]">
+                              {getMonthName(pr.month)} {pr.year}
+                            </h3>
+                            <span className={meta.cls}>{meta.label}</span>
+                          </div>
+                          <p className="mt-1 text-xs text-[var(--muted)]">Total pengajuan anggaran gaji</p>
+                          <p className="mt-3 text-xl sm:text-2xl font-bold text-[var(--ink)] tabular-nums">
+                            {formatRupiah(pr.total_budget)}
+                          </p>
+                        </div>
 
-                      {pr.status === 'submitted' && (
-                        <>
+                        <div
+                          className="flex flex-wrap items-center justify-end gap-1.5 pt-3"
+                          style={{ borderTop: '1px solid var(--line)' }}
+                        >
                           <button
                             type="button"
-                            onClick={() => triggerApproval(pr, 'draft')}
-                            className="nim-btn nim-btn--danger"
+                            onClick={() => handleInspect(pr)}
+                            className="nim-btn"
                           >
-                            <RotateCcw className="h-3.5 w-3.5" />
-                            <span>Revisi</span>
+                            <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
+                            <span>Periksa Rincian</span>
                           </button>
 
-                          <button
-                            type="button"
-                            onClick={() => triggerApproval(pr, 'approved')}
-                            className="nim-btn nim-btn--good"
-                          >
-                            <CheckCircle2 className="h-3.5 w-3.5" />
-                            <span>Setujui</span>
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </motion.div>
-          </AnimatePresence>
+                          {pr.status === 'submitted' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => triggerApproval(pr, 'draft')}
+                                className="nim-btn nim-btn--danger"
+                              >
+                                <RotateCcw className="h-3.5 w-3.5" />
+                                <span>Revisi</span>
+                              </button>
+
+                              <button
+                                type="button"
+                                onClick={() => triggerApproval(pr, 'approved')}
+                                className="nim-btn nim-btn--good"
+                              >
+                                <CheckCircle2 className="h-3.5 w-3.5" />
+                                <span>Setujui</span>
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </motion.div>
+              </AnimatePresence>
+            )}
+
+            <PaginationBar
+              currentPage={safePayrollPage}
+              totalItems={filteredPayrolls.length}
+              pageSize={payrollPageSize}
+              onPageChange={setPayrollPage}
+              onPageSizeChange={(size) => {
+                setPayrollPageSize(size);
+                setPayrollPage(1);
+              }}
+              itemLabel="periode"
+            />
+          </div>
         )}
       </section>
 
@@ -524,27 +635,31 @@ export function KepsekDashboard({
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              {details.length > 0 && (
+              {filteredDetails.length > 0 && (
                 <button
                   type="button"
-                  onClick={() => {
-                    downloadBatchPayslipsPdf(
-                      details.map((row) => ({
-                        ...row,
-                        month: selectedPayroll.month,
-                        year: selectedPayroll.year,
-                        payroll_status: selectedPayroll.status,
-                      })),
-                      `Kepsek_${getMonthName(selectedPayroll.month)}_${selectedPayroll.year}`
-                    );
-                    notify.success(
-                      `Mengunduh ${details.length} slip PDF (2 slip per halaman A4).`
-                    );
+                  onClick={async () => {
+                    try {
+                      await downloadBatchPayslipsPdf(
+                        filteredDetails.map(({ row }) => ({
+                          ...row,
+                          month: selectedPayroll.month,
+                          year: selectedPayroll.year,
+                          payroll_status: selectedPayroll.status,
+                        })),
+                        `Kepsek_${getMonthName(selectedPayroll.month)}_${selectedPayroll.year}`
+                      );
+                      notify.success(
+                        `Mengunduh ${filteredDetails.length} slip PDF (2 slip per halaman A4).`
+                      );
+                    } catch (err) {
+                      notify.error(err?.message || 'Gagal membuat PDF slip massal.');
+                    }
                   }}
                   className="nim-btn nim-btn--primary nim-btn--sm"
                 >
                   <FileDown className="h-3.5 w-3.5" />
-                  <span>Unduh Semua (2/Hal A4)</span>
+                  <span>Unduh Semua ({filteredDetails.length}) (2/Hal A4)</span>
                 </button>
               )}
               <button
@@ -558,16 +673,37 @@ export function KepsekDashboard({
             </div>
           </div>
 
-          <div className="fluid-container">
-            {details.map((row) => {
-              let d = {};
-              try {
-                d = JSON.parse(row.details_json || '{}');
-              } catch {
-                d = {};
-              }
-              return (
-                <div key={row.id} className="fluid-item nim-card-well p-4 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="relative flex-1 min-w-[210px] max-w-sm">
+              <Search className="h-3.5 w-3.5 text-[var(--muted)] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={detailSearch}
+                onChange={(e) => setDetailSearch(e.target.value)}
+                placeholder="Cari nama PTK, NIP, atau kategori..."
+                className="nim-input !pl-8 !py-1.5 text-xs w-full"
+              />
+            </div>
+            {detailSearch && (
+              <button
+                type="button"
+                onClick={() => setDetailSearch('')}
+                className="nim-btn nim-btn--sm"
+              >
+                Reset
+              </button>
+            )}
+          </div>
+
+          {filteredDetails.length === 0 ? (
+            <div className="nim-card-well p-5 text-center text-xs text-[var(--muted)]">
+              Tidak ada rincian PTK yang sesuai pencarian.
+            </div>
+          ) : (
+            <div className="fluid-container">
+              {pagedDetails.map(({ row, d }) => {
+                return (
+                  <div key={row.id} className="fluid-item nim-card-well p-4 space-y-2.5">
                   <div className="flex items-start justify-between">
                     <div>
                       <div className="flex flex-wrap items-center gap-1.5 mb-0.5">
@@ -649,10 +785,23 @@ export function KepsekDashboard({
                       {formatRupiah(row.net_salary)}
                     </span>
                   </div>
-                </div>
-              );
-            })}
-          </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <PaginationBar
+            currentPage={safeDetailPage}
+            totalItems={filteredDetails.length}
+            pageSize={detailPageSize}
+            onPageChange={setDetailPage}
+            onPageSizeChange={(size) => {
+              setDetailPageSize(size);
+              setDetailPage(1);
+            }}
+            itemLabel="PTK"
+          />
         </section>
       )}
 

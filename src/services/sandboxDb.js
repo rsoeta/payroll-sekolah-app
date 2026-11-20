@@ -2147,7 +2147,15 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'payrollDetails.byPayroll': {
       if (session.role !== 'admin' && session.role !== 'kepsek') return forbidden();
-      const rows = db.Payroll_Details.filter((d) => d.payroll_id === payload.payroll_id);
+      let rows = db.Payroll_Details.filter((d) => d.payroll_id === payload.payroll_id);
+      if (rows.length === 0) {
+        const parent = (db.Payrolls || []).find((p) => p.id === payload.payroll_id);
+        if (parent && parent.year && db.Archives) {
+          const archKey = `Archive_Payroll_Details_${Number(parent.year)}`;
+          const archived = Array.isArray(db.Archives[archKey]) ? db.Archives[archKey] : [];
+          rows = archived.filter((d) => d.payroll_id === payload.payroll_id);
+        }
+      }
       return { ok: true, status: 200, data: rows };
     }
 
@@ -2930,6 +2938,188 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       bumpVersions(['school_profile']);
       saveDb(db);
       return { ok: true, status: 200, data: db.School_Profile };
+    }
+
+    case 'maintenance.archiveStatus': {
+      if (session.role !== 'admin') return forbidden();
+      const currentYear = new Date().getFullYear();
+      const logs = Array.isArray(db.Attendance_Logs) ? db.Attendance_Logs : [];
+      const atts = Array.isArray(db.Attendances) ? db.Attendances : [];
+      const payrolls = Array.isArray(db.Payrolls) ? db.Payrolls : [];
+      const details = Array.isArray(db.Payroll_Details) ? db.Payroll_Details : [];
+      const notifs = Array.isArray(db.Notifications) ? db.Notifications : [];
+
+      const yearsSet = new Set();
+      logs.forEach((l) => Number(l.year) && yearsSet.add(Number(l.year)));
+      atts.forEach((a) => Number(a.year) && yearsSet.add(Number(a.year)));
+      payrolls.forEach((p) => Number(p.year) && yearsSet.add(Number(p.year)));
+
+      const payrollYearById = new Map();
+      payrolls.forEach((p) => payrollYearById.set(p.id, { year: Number(p.year), status: p.status }));
+
+      const yearlyBreakdown = Array.from(yearsSet)
+        .sort((a, b) => a - b)
+        .map((yr) => {
+          const yearLogs = logs.filter((l) => Number(l.year) === yr);
+          const yearAtts = atts.filter((a) => Number(a.year) === yr);
+          const yearPayrolls = payrolls.filter((p) => Number(p.year) === yr);
+          const paidPayrollsCount = yearPayrolls.filter((p) => p.status === 'paid').length;
+          const unpaidPayrollsCount = yearPayrolls.length - paidPayrollsCount;
+          const yearDetailsCount = details.filter(
+            (d) => payrollYearById.get(d.payroll_id)?.year === yr
+          ).length;
+          const archivableRowsCount = yearLogs.length + yearAtts.length + yearDetailsCount;
+          return {
+            year: yr,
+            attendanceLogsCount: yearLogs.length,
+            attendancesCount: yearAtts.length,
+            payrollsCount: yearPayrolls.length,
+            paidPayrollsCount,
+            unpaidPayrollsCount,
+            payrollDetailsCount: yearDetailsCount,
+            archivableRowsCount,
+            canArchiveSafely:
+              yr < currentYear && unpaidPayrollsCount === 0 && archivableRowsCount > 0,
+          };
+        });
+
+      const cutoffMs = Date.now() - 90 * 86400000;
+      const unreadCount = notifs.filter((n) => !n.is_read).length;
+      const prunableReadOldCount = notifs.filter((n) => {
+        if (!n.is_read) return false;
+        const ts = Date.parse(n.created_at || '');
+        return Number.isFinite(ts) && ts < cutoffMs;
+      }).length;
+
+      const archiveObj = db.Archives && typeof db.Archives === 'object' ? db.Archives : {};
+      const archiveSheets = Object.keys(archiveObj).map((sheetName) => ({
+        sheetName,
+        rowCount: Array.isArray(archiveObj[sheetName]) ? archiveObj[sheetName].length : 0,
+      }));
+
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          currentYear,
+          activeCounts: {
+            teachers: (db.Teachers || []).length,
+            attendance_logs: logs.length,
+            attendances: atts.length,
+            payrolls: payrolls.length,
+            payroll_details: details.length,
+            disbursements: (db.Disbursement_Requests || []).length,
+            notifications: notifs.length,
+          },
+          yearlyBreakdown,
+          archiveSheets,
+          notificationsStats: {
+            totalCount: notifs.length,
+            unreadCount,
+            prunableReadOldCount,
+          },
+        },
+      };
+    }
+
+    case 'maintenance.archiveYear': {
+      if (session.role !== 'admin') return forbidden();
+      const targetYear = Number(payload.year);
+      const currentYear = new Date().getFullYear();
+      if (!targetYear || targetYear < 2020 || targetYear > 2100) {
+        return { ok: false, status: 400, error: 'Tahun arsip tidak valid.' };
+      }
+      if (targetYear >= currentYear) {
+        return {
+          ok: false,
+          status: 409,
+          error: `Tahun ${targetYear} adalah tahun berjalan/mendatang dan belum boleh diarsipkan.`,
+        };
+      }
+      const payrolls = Array.isArray(db.Payrolls) ? db.Payrolls : [];
+      const yearPayrolls = payrolls.filter((p) => Number(p.year) === targetYear);
+      const hasUnpaid = yearPayrolls.some((p) => p.status !== 'paid');
+      if (hasUnpaid) {
+        return {
+          ok: false,
+          status: 409,
+          error: `Masih ada periode payroll tahun ${targetYear} yang belum berstatus PAID.`,
+        };
+      }
+
+      if (!db.Archives || typeof db.Archives !== 'object') db.Archives = {};
+      const paidPayrollIds = new Set(yearPayrolls.map((p) => p.id));
+
+      const logsToArchive = (db.Attendance_Logs || []).filter((l) => Number(l.year) === targetYear);
+      db.Attendance_Logs = (db.Attendance_Logs || []).filter((l) => Number(l.year) !== targetYear);
+
+      const attsToArchive = (db.Attendances || []).filter((a) => Number(a.year) === targetYear);
+      db.Attendances = (db.Attendances || []).filter((a) => Number(a.year) !== targetYear);
+
+      const detailsToArchive = (db.Payroll_Details || []).filter((d) =>
+        paidPayrollIds.has(d.payroll_id)
+      );
+      db.Payroll_Details = (db.Payroll_Details || []).filter(
+        (d) => !paidPayrollIds.has(d.payroll_id)
+      );
+
+      const archiveSheetsCreated = [];
+      if (logsToArchive.length > 0) {
+        const sName = `Archive_Attendance_Logs_${targetYear}`;
+        db.Archives[sName] = [...(db.Archives[sName] || []), ...logsToArchive];
+        archiveSheetsCreated.push(sName);
+      }
+      if (attsToArchive.length > 0) {
+        const sName = `Archive_Attendances_${targetYear}`;
+        db.Archives[sName] = [...(db.Archives[sName] || []), ...attsToArchive];
+        archiveSheetsCreated.push(sName);
+      }
+      if (detailsToArchive.length > 0) {
+        const sName = `Archive_Payroll_Details_${targetYear}`;
+        db.Archives[sName] = [...(db.Archives[sName] || []), ...detailsToArchive];
+        archiveSheetsCreated.push(sName);
+      }
+
+      bumpVersions(['attendances', 'payrolls']);
+      saveDb(db);
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          archivedYear: targetYear,
+          movedAttendanceLogs: logsToArchive.length,
+          movedAttendances: attsToArchive.length,
+          movedPayrollDetails: detailsToArchive.length,
+          archiveSheetsCreated,
+        },
+      };
+    }
+
+    case 'maintenance.pruneNotifications': {
+      if (session.role !== 'admin') return forbidden();
+      const days = Math.max(7, Math.min(365, Number(payload.olderThanDays || 90)));
+      const cutoffMs = Date.now() - days * 86400000;
+      const before = db.Notifications || [];
+      const kept = before.filter((n) => {
+        if (!n.is_read) return true;
+        const ts = Date.parse(n.created_at || '');
+        return !Number.isFinite(ts) || ts >= cutoffMs;
+      });
+      const removedCount = before.length - kept.length;
+      if (removedCount > 0) {
+        db.Notifications = kept;
+        bumpVersions(['notifications']);
+        saveDb(db);
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          removedCount,
+          remainingCount: kept.length,
+          olderThanDays: days,
+        },
+      };
     }
 
     default:

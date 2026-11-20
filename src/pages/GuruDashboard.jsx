@@ -34,7 +34,7 @@ import {
 import {
   downloadBatchPayslipsPdf,
   downloadPayslipPdf,
-} from '../utils/pdfSlipGenerator';
+} from '../utils/pdfSlipLoader';
 import FloatingTabBar from '../components/FloatingTabBar';
 import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
 import DisbursementRequestSection from '../components/DisbursementRequestSection';
@@ -318,8 +318,8 @@ export function GuruDashboard({
     ]);
   }, [slips, onSearchItemsChange, setActiveTab]);
 
-  const handleDownloadPdf = (slip) => {
-    downloadPayslipPdf(slip);
+  const handleDownloadPdf = async (slip) => {
+    await downloadPayslipPdf(slip);
     const meta = SLIP_STATUS_META[slip.payroll_status] || SLIP_STATUS_META.approved;
     notify.success(
       `${meta.isEstimate ? 'Pratinjau Estimasi Slip' : 'Slip Gaji'} ${getMonthName(
@@ -555,8 +555,8 @@ export function GuruDashboard({
           {slips.length > 1 && (
             <button
               type="button"
-              onClick={() => {
-                downloadBatchPayslipsPdf(
+              onClick={async () => {
+                await downloadBatchPayslipsPdf(
                   slips,
                   `${teacherProfile.nip || 'PTK'}_Riwayat`
                 );

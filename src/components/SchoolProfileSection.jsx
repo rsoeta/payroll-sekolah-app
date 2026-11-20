@@ -16,7 +16,7 @@ import {
   resetSchoolProfileToDefault,
   processLogoImageFile,
 } from '../services/schoolProfileService';
-import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
+import { downloadPayslipPdf } from '../utils/pdfSlipLoader';
 import notify from '../utils/notify';
 
 export function SchoolProfileSection() {

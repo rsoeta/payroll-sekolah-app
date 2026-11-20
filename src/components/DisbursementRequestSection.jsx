@@ -30,7 +30,7 @@ import {
   getDisbursementStatusMeta,
   getDisbursementTimingMeta,
 } from '../utils/disbursementHelpers';
-import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
+import { downloadPayslipPdf } from '../utils/pdfSlipLoader';
 
 export function DisbursementRequestSection({
   teacherProfile,
@@ -207,7 +207,7 @@ export function DisbursementRequestSection({
     }
   };
 
-  const handleDownloadDisbursementSlip = (req) => {
+  const handleDownloadDisbursementSlip = async (req) => {
     const slipPayload = {
       id: req.issued_slip_id || req.id,
       slip_type: 'disbursement',
@@ -222,7 +222,7 @@ export function DisbursementRequestSection({
       bank_account: teacherProfile?.bank_account,
       details_json: req.issued_slip_json || '{}',
     };
-    downloadPayslipPdf(slipPayload);
+    await downloadPayslipPdf(slipPayload);
     notify.success(
       `Slip Gaji Pencairan Resmi (${getMonthName(req.month)} ${req.year}) berhasil diunduh.`
     );

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { Suspense, useState, useEffect, useMemo, useCallback } from 'react';
 import {
   Banknote,
   Building2,
@@ -12,12 +12,24 @@ import {
 import AppShell from './components/AppShell';
 import GlobalToast from './components/GlobalToast';
 import LoginPage from './pages/LoginPage';
-import AdminDashboard from './pages/AdminDashboard';
-import KepsekDashboard from './pages/KepsekDashboard';
-import GuruDashboard from './pages/GuruDashboard';
 import api, { getSavedSession, clearSession } from './services/gasApi';
 import { resetRealtimeSyncState } from './services/realtimeSync';
 import notify from './utils/notify';
+
+const AdminDashboard = React.lazy(() => import('./pages/AdminDashboard'));
+const KepsekDashboard = React.lazy(() => import('./pages/KepsekDashboard'));
+const GuruDashboard = React.lazy(() => import('./pages/GuruDashboard'));
+
+function DashboardLoadingFallback() {
+  return (
+    <div className="nim-glass nim-card my-8 p-8 text-center space-y-2">
+      <div className="inline-flex h-8 w-8 items-center justify-center rounded-full border-2 border-[var(--accent-text)] border-t-transparent animate-spin" />
+      <p className="text-xs sm:text-sm font-semibold text-[var(--ink-2)]">
+        Memuat modul dasbor...
+      </p>
+    </div>
+  );
+}
 
 const DEFAULT_TAB_BY_ROLE = {
   admin: 'payroll',
@@ -189,34 +201,40 @@ export function App() {
     switch (user.role) {
       case 'admin':
         return (
-          <AdminDashboard
-            refreshTrigger={refreshCounter}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            onBadgesChange={setNavBadges}
-            onSearchItemsChange={setQuickSearchItems}
-          />
+          <Suspense fallback={<DashboardLoadingFallback />}>
+            <AdminDashboard
+              refreshTrigger={refreshCounter}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              onBadgesChange={setNavBadges}
+              onSearchItemsChange={setQuickSearchItems}
+            />
+          </Suspense>
         );
       case 'kepsek':
         return (
-          <KepsekDashboard
-            refreshTrigger={refreshCounter}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            onBadgesChange={setNavBadges}
-            onSearchItemsChange={setQuickSearchItems}
-          />
+          <Suspense fallback={<DashboardLoadingFallback />}>
+            <KepsekDashboard
+              refreshTrigger={refreshCounter}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              onBadgesChange={setNavBadges}
+              onSearchItemsChange={setQuickSearchItems}
+            />
+          </Suspense>
         );
       case 'guru':
         return (
-          <GuruDashboard
-            user={user}
-            refreshTrigger={refreshCounter}
-            activeTab={activeTab}
-            onTabChange={setActiveTab}
-            onBadgesChange={setNavBadges}
-            onSearchItemsChange={setQuickSearchItems}
-          />
+          <Suspense fallback={<DashboardLoadingFallback />}>
+            <GuruDashboard
+              user={user}
+              refreshTrigger={refreshCounter}
+              activeTab={activeTab}
+              onTabChange={setActiveTab}
+              onBadgesChange={setNavBadges}
+              onSearchItemsChange={setQuickSearchItems}
+            />
+          </Suspense>
         );
       default:
         return (
