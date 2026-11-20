@@ -15,9 +15,18 @@ import {
   X,
 } from 'lucide-react';
 import api, { isLiveGasMode } from '../services/gasApi';
+import {
+  emitDataChange,
+  publishNotificationsSnapshot,
+  startRealtimeVersionSync,
+  stopRealtimeVersionSync,
+  subscribeDataChange,
+  subscribeNotificationsSnapshot,
+} from '../services/realtimeSync';
 import notify from '../utils/notify';
 import { formatIsoDateTimeIndo } from '../utils/disbursementHelpers';
 import {
+  fetchSchoolProfileFromServer,
   getSchoolProfile,
   subscribeSchoolProfile,
 } from '../services/schoolProfileService';
@@ -162,17 +171,7 @@ export function AppShell({
       }
       try {
         const res = await api.get('notifications.list');
-        const items = Array.isArray(res?.items) ? res.items : [];
-        const nextUnread = Number(res?.unreadCount || 0);
-        if (announceNew && nextUnread > prevUnreadRef.current && items.length > 0) {
-          const newest = items.find((it) => !it.is_read) || items[0];
-          if (newest?.title) {
-            notify.info(newest.title);
-          }
-        }
-        prevUnreadRef.current = nextUnread;
-        setNotifications(items);
-        setUnreadCount(nextUnread);
+        publishNotificationsSnapshot(res, { announceNew });
       } catch {
         // Silent background polling failure
       }
@@ -181,13 +180,45 @@ export function AppShell({
   );
 
   useEffect(() => {
-    loadNotifications(false);
-    if (!user) return undefined;
-    const timer = setInterval(() => {
-      loadNotifications(true);
-    }, 20000);
-    return () => clearInterval(timer);
-  }, [user, activeTab, loadNotifications]);
+    return subscribeNotificationsSnapshot((snapshot, options = {}) => {
+      const items = Array.isArray(snapshot?.items) ? snapshot.items : [];
+      const nextUnread = Number(snapshot?.unreadCount || 0);
+      if (options.announceNew && nextUnread > prevUnreadRef.current && items.length > 0) {
+        const newest = items.find((it) => !it.is_read) || items[0];
+        if (newest?.title) {
+          notify.info(newest.title);
+        }
+      }
+      prevUnreadRef.current = nextUnread;
+      setNotifications(items);
+      setUnreadCount(nextUnread);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!user) {
+      stopRealtimeVersionSync();
+      setNotifications([]);
+      setUnreadCount(0);
+      prevUnreadRef.current = 0;
+      return undefined;
+    }
+
+    startRealtimeVersionSync({ intervalMs: 12000, legacyIntervalMs: 25000 });
+    const unsubSync = subscribeDataChange((domains, meta) => {
+      if (domains.includes('notifications') && meta?.source !== 'local_read') {
+        loadNotifications(meta?.source === 'remote_poll' || meta?.source === 'broadcast');
+      }
+      if (domains.includes('school_profile') && meta?.source === 'remote_poll') {
+        fetchSchoolProfileFromServer();
+      }
+    });
+
+    return () => {
+      unsubSync();
+      stopRealtimeVersionSync();
+    };
+  }, [user, loadNotifications]);
 
   useEffect(() => {
     if (!notifOpen) return undefined;
@@ -209,9 +240,12 @@ export function AppShell({
   const handleMarkAllRead = async () => {
     try {
       await api.put('notifications.markRead', { mark_all: true });
-      setNotifications((prev) => prev.map((n) => ({ ...n, is_read: true })));
-      setUnreadCount(0);
+      const nextItems = notifications.map((n) => ({ ...n, is_read: true }));
       prevUnreadRef.current = 0;
+      setNotifications(nextItems);
+      setUnreadCount(0);
+      publishNotificationsSnapshot({ items: nextItems, unreadCount: 0 }, { announceNew: false });
+      emitDataChange(['notifications'], { source: 'local_read' });
     } catch {
       // Ignore
     }
@@ -220,14 +254,18 @@ export function AppShell({
   const handleNotificationClick = async (notifItem) => {
     if (!notifItem.is_read) {
       api.put('notifications.markRead', { id: notifItem.id }).catch(() => { });
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === notifItem.id ? { ...n, is_read: true } : n))
+      const nextItems = notifications.map((n) =>
+        n.id === notifItem.id ? { ...n, is_read: true } : n
       );
-      setUnreadCount((c) => {
-        const next = Math.max(0, c - 1);
-        prevUnreadRef.current = next;
-        return next;
-      });
+      const nextUnread = Math.max(0, unreadCount - 1);
+      prevUnreadRef.current = nextUnread;
+      setNotifications(nextItems);
+      setUnreadCount(nextUnread);
+      publishNotificationsSnapshot(
+        { items: nextItems, unreadCount: nextUnread },
+        { announceNew: false }
+      );
+      emitDataChange(['notifications'], { source: 'local_read' });
     }
     setNotifOpen(false);
     if (String(notifItem.type || '').startsWith('disbursement_')) {

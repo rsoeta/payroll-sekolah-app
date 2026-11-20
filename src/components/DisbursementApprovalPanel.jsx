@@ -9,6 +9,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import api from '../services/gasApi';
+import { emitDataChange } from '../services/realtimeSync';
 import notify from '../utils/notify';
 import { formatRibuan, formatRupiah, getMonthName, parseRibuan } from '../utils/formatters';
 import {
@@ -93,7 +94,8 @@ export function DisbursementApprovalPanel({
             : `Pengajuan ${req.teacher_name} ditolak oleh Kepala Sekolah.`
         );
       }
-      onRefresh?.();
+      emitDataChange(['disbursements', 'notifications'], { source: 'disb_panel_local' });
+      onRefresh?.(['disbursements']);
     } catch (err) {
       notify.error(err.message || 'Gagal memproses persetujuan pencairan.');
     } finally {
@@ -112,7 +114,8 @@ export function DisbursementApprovalPanel({
       notify.success(
         `${targetIds.length} pengajuan pencairan berhasil disetujui kolektif & diteruskan ke Kepala Sekolah.`
       );
-      onRefresh?.();
+      emitDataChange(['disbursements', 'notifications'], { source: 'disb_panel_local' });
+      onRefresh?.(['disbursements']);
     } catch (err) {
       notify.error(err.message || 'Gagal menyetujui pengajuan secara kolektif.');
     } finally {

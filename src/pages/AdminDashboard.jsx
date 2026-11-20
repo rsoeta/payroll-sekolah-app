@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Users,
@@ -24,8 +24,16 @@ import {
   Ban,
   Banknote,
   Bell,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
-import api from '../services/gasApi';
+import api, { isActionUnsupported, markActionUnsupported } from '../services/gasApi';
+import {
+  emitDataChange,
+  publishNotificationsSnapshot,
+  seedServerVersions,
+  subscribeDataChange,
+} from '../services/realtimeSync';
 import notify from '../utils/notify';
 import {
   formatRupiah,
@@ -63,7 +71,10 @@ import TeacherFormModal from '../components/TeacherFormModal';
 import FloatingTabBar from '../components/FloatingTabBar';
 import SchoolProfileSection from '../components/SchoolProfileSection';
 import DisbursementApprovalPanel from '../components/DisbursementApprovalPanel';
-import { fetchSchoolProfileFromServer } from '../services/schoolProfileService';
+import {
+  fetchSchoolProfileFromServer,
+  saveLocalSchoolProfile,
+} from '../services/schoolProfileService';
 
 const STATUS_BADGE = {
   draft: { label: 'Draf', cls: 'nim-badge' },
@@ -166,24 +177,18 @@ export function AdminDashboard({
     onConfirm: null,
   });
 
-  const loadAllData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [teacherList, payrollList, attList, logList, disbList] = await Promise.all([
-        api.get('teachers.list'),
-        api.get('payrolls.list'),
-        api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
-        api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }).catch(() => []),
-        api.get('disbursements.list').catch(() => []),
-      ]);
-      setTeachers(teacherList || []);
-      setPayrolls(payrollList || []);
-      setAttendances(attList || []);
-      setAttendanceLogs(Array.isArray(logList) ? logList : []);
-      setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
+  const dirtyAttTeacherIdsRef = useRef(new Set());
+  const selectedPayrollRef = useRef(null);
+  selectedPayrollRef.current = selectedPayroll;
 
+  const buildAttEditsMap = useCallback(
+    (teacherList, attList, logList, prevEdits = {}, preserveDirty = false) => {
       const nextAttMap = {};
       (teacherList || []).forEach((t) => {
+        if (preserveDirty && dirtyAttTeacherIdsRef.current.has(t.id) && prevEdits[t.id]) {
+          nextAttMap[t.id] = prevEdits[t.id];
+          return;
+        }
         const found = (attList || []).find((a) => a.teacher_id === t.id);
         const teacherLogs = (Array.isArray(logList) ? logList : []).filter(
           (l) => l.teacher_id === t.id
@@ -209,29 +214,208 @@ export function AdminDashboard({
           };
         }
       });
-      setAttEdits(nextAttMap);
+      return nextAttMap;
+    },
+    []
+  );
+
+  const loadAllData = useCallback(async () => {
+    setLoading(true);
+    dirtyAttTeacherIdsRef.current.clear();
+    try {
+      let loadedViaBootstrap = false;
+      if (!isActionUnsupported('bootstrap.admin')) {
+        try {
+          const bundle = await api.get('bootstrap.admin', {
+            month: selectedMonth,
+            year: selectedYear,
+          });
+          if (bundle && typeof bundle === 'object') {
+            const teacherList = bundle.teachers || [];
+            const payrollList = bundle.payrolls || [];
+            const attList = bundle.attendances || [];
+            const logList = Array.isArray(bundle.attendanceLogs) ? bundle.attendanceLogs : [];
+            const disbList = Array.isArray(bundle.disbursements) ? bundle.disbursements : [];
+            setTeachers(teacherList);
+            setPayrolls(payrollList);
+            setAttendances(attList);
+            setAttendanceLogs(logList);
+            setDisbursementRequests(disbList);
+            setAttEdits((prev) => buildAttEditsMap(teacherList, attList, logList, prev, false));
+            seedServerVersions(bundle.versions);
+            if (bundle.schoolProfile) {
+              saveLocalSchoolProfile(bundle.schoolProfile);
+            }
+            if (bundle.notifications) {
+              publishNotificationsSnapshot(bundle.notifications, { announceNew: false });
+            }
+            loadedViaBootstrap = true;
+          }
+        } catch (bootErr) {
+          if (bootErr?.status === 404 || String(bootErr?.message || '').includes('404')) {
+            markActionUnsupported('bootstrap.admin');
+          } else {
+            throw bootErr;
+          }
+        }
+      }
+
+      if (!loadedViaBootstrap) {
+        const [teacherList, payrollList, attList, logList, disbList] = await Promise.all([
+          api.get('teachers.list'),
+          api.get('payrolls.list'),
+          api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
+          api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }).catch(() => []),
+          api.get('disbursements.list').catch(() => []),
+        ]);
+        const validLogs = Array.isArray(logList) ? logList : [];
+        setTeachers(teacherList || []);
+        setPayrolls(payrollList || []);
+        setAttendances(attList || []);
+        setAttendanceLogs(validLogs);
+        setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
+        setAttEdits((prev) => buildAttEditsMap(teacherList, attList, validLogs, prev, false));
+        fetchSchoolProfileFromServer();
+      }
     } catch (err) {
       notify.error(err.message || 'Gagal memuat data administrasi.');
     } finally {
       setLoading(false);
     }
-  }, [selectedMonth, selectedYear]);
+  }, [selectedMonth, selectedYear, buildAttEditsMap]);
+
+  const refreshDomains = useCallback(
+    async (domains = [], { silent = true } = {}) => {
+      const domainSet = new Set(domains);
+      try {
+        let nextTeachers = null;
+        let nextAtt = null;
+        let nextLogs = null;
+
+        const tasks = [];
+        if (domainSet.has('teachers')) {
+          tasks.push(
+            api.get('teachers.list').then((res) => {
+              nextTeachers = res || [];
+              setTeachers(nextTeachers);
+            })
+          );
+        }
+        if (domainSet.has('attendances')) {
+          tasks.push(
+            api
+              .get('attendances.list', { month: selectedMonth, year: selectedYear })
+              .then((res) => {
+                nextAtt = res || [];
+                setAttendances(nextAtt);
+              })
+          );
+          tasks.push(
+            api
+              .get('attendanceLogs.list', { month: selectedMonth, year: selectedYear })
+              .catch(() => [])
+              .then((res) => {
+                nextLogs = Array.isArray(res) ? res : [];
+                setAttendanceLogs(nextLogs);
+              })
+          );
+        }
+        if (domainSet.has('payrolls')) {
+          tasks.push(
+            api.get('payrolls.list').then(async (res) => {
+              const list = res || [];
+              setPayrolls(list);
+              if (selectedPayrollRef.current) {
+                const updatedSel = list.find((p) => p.id === selectedPayrollRef.current.id);
+                if (updatedSel) {
+                  setSelectedPayroll(updatedSel);
+                }
+                const details = await api
+                  .get('payrollDetails.byPayroll', { payroll_id: selectedPayrollRef.current.id })
+                  .catch(() => null);
+                if (Array.isArray(details)) {
+                  setPayrollDetails(details);
+                }
+              }
+            })
+          );
+        }
+        if (domainSet.has('disbursements')) {
+          tasks.push(
+            api
+              .get('disbursements.list')
+              .catch(() => [])
+              .then((res) => {
+                setDisbursementRequests(Array.isArray(res) ? res : []);
+              })
+          );
+        }
+
+        if (tasks.length === 0) return;
+        await Promise.all(tasks);
+
+        if (nextTeachers !== null || nextAtt !== null || nextLogs !== null) {
+          setTeachers((curTeachers) => {
+            const tList = nextTeachers ?? curTeachers;
+            setAttendances((curAtt) => {
+              const aList = nextAtt ?? curAtt;
+              setAttendanceLogs((curLogs) => {
+                const lList = nextLogs ?? curLogs;
+                setAttEdits((prev) =>
+                  buildAttEditsMap(tList, aList, lList, prev, Boolean(silent))
+                );
+                return lList;
+              });
+              return aList;
+            });
+            return tList;
+          });
+        }
+      } catch (err) {
+        if (!silent) {
+          notify.error(err.message || 'Gagal menyegarkan data.');
+        }
+      }
+    },
+    [selectedMonth, selectedYear, buildAttEditsMap]
+  );
 
   useEffect(() => {
     loadAllData();
-    fetchSchoolProfileFromServer();
   }, [loadAllData, refreshTrigger]);
+
+  useEffect(() => {
+    return subscribeDataChange((domains, meta) => {
+      if (meta?.source === 'admin_local') return;
+      const relevant = domains.filter((d) =>
+        ['teachers', 'attendances', 'payrolls', 'disbursements'].includes(d)
+      );
+      if (relevant.length === 0) return;
+      const nextSet = new Set(relevant);
+      if (
+        (nextSet.has('teachers') || nextSet.has('attendances')) &&
+        payrolls.some((p) => p.status === 'draft')
+      ) {
+        nextSet.add('payrolls');
+      }
+      refreshDomains(Array.from(nextSet), { silent: true });
+    });
+  }, [refreshDomains, payrolls]);
 
   const pendingDisbursementsCount = disbursementRequests.filter(
     (r) => r.status === 'pending_treasurer'
   ).length;
+  const outOfSyncDraftsCount = payrolls.filter(
+    (p) => p.status === 'draft' && p.needs_resync
+  ).length;
 
   useEffect(() => {
     onBadgesChange?.({
+      payroll: outOfSyncDraftsCount > 0 ? outOfSyncDraftsCount : undefined,
       teachers: teachers.length,
       disbursements: pendingDisbursementsCount > 0 ? pendingDisbursementsCount : undefined,
     });
-  }, [teachers.length, pendingDisbursementsCount, onBadgesChange]);
+  }, [teachers.length, pendingDisbursementsCount, outOfSyncDraftsCount, onBadgesChange]);
 
   const openEditTeacherModal = useCallback((teacher) => {
     const comp = teacher.salary_component || {};
@@ -388,7 +572,8 @@ export function AdminDashboard({
         notify.success('Data PTK baru & Komponen Gaji berhasil ditambahkan.');
       }
       setTeacherModalOpen(false);
-      loadAllData();
+      emitDataChange(['teachers', 'payrolls'], { source: 'admin_local' });
+      refreshDomains(['teachers', 'payrolls'], { silent: true });
     } catch (err) {
       notify.error(err.message || 'Gagal menyimpan data guru.');
     }
@@ -405,7 +590,8 @@ export function AdminDashboard({
         try {
           await api.delete('teachers.delete', { id: teacher.id });
           notify.success('Data guru berhasil dihapus.');
-          loadAllData();
+          emitDataChange(['teachers', 'payrolls'], { source: 'admin_local' });
+          refreshDomains(['teachers', 'payrolls'], { silent: true });
         } catch (err) {
           notify.error(err.message || 'Gagal menghapus data guru.');
         }
@@ -421,7 +607,8 @@ export function AdminDashboard({
           bulkResult.updatedCount || 0
         )} diperbarui.`
       );
-      await loadAllData();
+      emitDataChange(['teachers', 'payrolls'], { source: 'admin_local' });
+      await refreshDomains(['teachers', 'payrolls'], { silent: false });
     } catch (bulkErr) {
       if (bulkErr.status === 404 || String(bulkErr.message || '').includes('404')) {
         let created = 0;
@@ -440,7 +627,8 @@ export function AdminDashboard({
         notify.success(
           `Import selesai! ${formatRibuan(created)} PTK baru, ${formatRibuan(updated)} diperbarui.`
         );
-        await loadAllData();
+        emitDataChange(['teachers', 'payrolls'], { source: 'admin_local' });
+        await refreshDomains(['teachers', 'payrolls'], { silent: false });
       } else {
         throw bulkErr;
       }
@@ -451,6 +639,7 @@ export function AdminDashboard({
 
   const handleAttFieldChange = (teacherId, field, value) => {
     const cleanNum = Math.max(0, Number(value || 0));
+    dirtyAttTeacherIdsRef.current.add(teacherId);
     setAttEdits((prev) => ({
       ...prev,
       [teacherId]: {
@@ -472,28 +661,71 @@ export function AdminDashboard({
         absent_days: row.absent_days,
         total_jtm: row.total_jtm,
       });
+      dirtyAttTeacherIdsRef.current.delete(teacher.id);
       notify.success(`Kehadiran ${teacher.name} disimpan.`);
-      loadAllData();
+      emitDataChange(['attendances', 'payrolls'], { source: 'admin_local' });
+      refreshDomains(['attendances', 'payrolls'], { silent: true });
     } catch (err) {
       notify.error(err.message || 'Gagal menyimpan kehadiran.');
     }
   };
 
   const handleSaveAllAttendances = async () => {
+    const items = teachers.map((t) => {
+      const row = attEdits[t.id] || { present_days: 0, absent_days: 0, total_jtm: 0 };
+      return {
+        teacher_id: t.id,
+        present_days: row.present_days,
+        absent_days: row.absent_days,
+        total_jtm: row.total_jtm,
+      };
+    });
+    if (items.length === 0) {
+      notify.warn('Belum ada data PTK untuk disimpan kehadirannya.');
+      return;
+    }
+
     try {
-      for (const t of teachers) {
-        const row = attEdits[t.id] || { present_days: 0, absent_days: 0, total_jtm: 0 };
-        await api.post('attendances.upsert', {
-          teacher_id: t.id,
-          month: selectedMonth,
-          year: selectedYear,
-          present_days: row.present_days,
-          absent_days: row.absent_days,
-          total_jtm: row.total_jtm,
-        });
+      let savedViaBatch = false;
+      if (!isActionUnsupported('attendances.bulkUpsert')) {
+        try {
+          const bulkRes = await api.post('attendances.bulkUpsert', {
+            month: selectedMonth,
+            year: selectedYear,
+            items,
+          });
+          if (bulkRes?.versions) {
+            seedServerVersions(bulkRes.versions);
+          }
+          savedViaBatch = true;
+        } catch (bulkErr) {
+          if (bulkErr?.status === 404 || String(bulkErr?.message || '').includes('404')) {
+            markActionUnsupported('attendances.bulkUpsert');
+          } else {
+            throw bulkErr;
+          }
+        }
       }
-      notify.success(`Seluruh data kehadiran ${getMonthName(selectedMonth)} ${selectedYear} tersimpan!`);
-      loadAllData();
+
+      if (!savedViaBatch) {
+        for (const item of items) {
+          await api.post('attendances.upsert', {
+            teacher_id: item.teacher_id,
+            month: selectedMonth,
+            year: selectedYear,
+            present_days: item.present_days,
+            absent_days: item.absent_days,
+            total_jtm: item.total_jtm,
+          });
+        }
+      }
+
+      dirtyAttTeacherIdsRef.current.clear();
+      notify.success(
+        `Seluruh data kehadiran ${getMonthName(selectedMonth)} ${selectedYear} tersimpan!`
+      );
+      emitDataChange(['attendances', 'payrolls'], { source: 'admin_local' });
+      refreshDomains(['attendances', 'payrolls'], { silent: false });
     } catch (err) {
       notify.error(err.message || 'Gagal menyimpan kehadiran kolektif.');
     }
@@ -526,7 +758,9 @@ export function AdminDashboard({
       } else {
         notify.info('Status validasi log dikembalikan ke Belum Divalidasi.');
       }
-      await loadAllData();
+      dirtyAttTeacherIdsRef.current.clear();
+      emitDataChange(['attendances', 'payrolls'], { source: 'admin_local' });
+      await refreshDomains(['attendances', 'payrolls'], { silent: false });
     } catch (err) {
       notify.error(err.message || 'Gagal memperbarui status validasi log.');
     } finally {
@@ -536,27 +770,48 @@ export function AdminDashboard({
 
   /* --- PAYROLL FLOW HANDLERS --- */
 
-  const handleGenerateDraft = async () => {
+  const handleGenerateDraft = async (targetMonth = selectedMonth, targetYear = selectedYear) => {
+    const cleanMonth =
+      typeof targetMonth === 'string' || typeof targetMonth === 'number'
+        ? targetMonth
+        : selectedMonth;
+    const cleanYear = typeof targetYear === 'number' ? targetYear : selectedYear;
     try {
       const generated = await api.post('payrolls.generateDraft', {
-        month: selectedMonth,
-        year: selectedYear,
+        month: cleanMonth,
+        year: cleanYear,
       });
+      if (generated?.versions) {
+        seedServerVersions(generated.versions);
+      }
       notify.success(
-        `Draf Payroll ${getMonthName(selectedMonth)} ${selectedYear} berhasil dikalkulasi!`
+        `Draf Payroll ${getMonthName(cleanMonth)} ${cleanYear} berhasil disinkronkan & dikalkulasi!`
       );
-      await loadAllData();
-      handleInspectPayroll(generated);
+      if (generated && Array.isArray(generated.details)) {
+        setSelectedPayroll(generated);
+        setPayrollDetails(generated.details);
+      } else if (generated) {
+        handleInspectPayroll(generated);
+      }
+      emitDataChange(['payrolls'], { source: 'admin_local' });
+      await refreshDomains(['payrolls'], { silent: false });
     } catch (err) {
       notify.error(err.message || 'Gagal men-generate draf payroll.');
     }
   };
 
   const requestStatusChange = (payrollRow, nextStatus, title, message, variant = 'primary') => {
+    const outOfSyncWarn =
+      nextStatus === 'submitted' && payrollRow?.needs_resync
+        ? `PERHATIAN: Draf ini belum disinkronkan dengan perubahan terbaru (${(
+            payrollRow.resync_reasons || []
+          ).join(' & ')}). Disarankan klik "Sinkronkan Draf" terlebih dahulu. Tetap ajukan dengan angka saat ini?\n\n${message}`
+        : message;
+
     setConfirmDialog({
       isOpen: true,
       title,
-      message,
+      message: outOfSyncWarn,
       variant,
       onConfirm: async () => {
         setConfirmDialog((prev) => ({ ...prev, isOpen: false }));
@@ -569,7 +824,8 @@ export function AdminDashboard({
           if (selectedPayroll && selectedPayroll.id === payrollRow.id) {
             setSelectedPayroll(updated);
           }
-          loadAllData();
+          emitDataChange(['payrolls', 'notifications'], { source: 'admin_local' });
+          refreshDomains(['payrolls'], { silent: false });
         } catch (err) {
           notify.error(err.message || 'Gagal memperbarui status payroll.');
         }
@@ -705,7 +961,12 @@ export function AdminDashboard({
             }}
           >
             {[
-              { id: 'payroll', label: 'Alur Penggajian', icon: Wallet },
+              {
+                id: 'payroll',
+                label: 'Alur Penggajian',
+                icon: Wallet,
+                badge: outOfSyncDraftsCount,
+              },
               { id: 'attendance', label: 'Kehadiran & JTM', icon: CalendarCheck },
               {
                 id: 'disbursements',
@@ -894,13 +1155,21 @@ export function AdminDashboard({
                     {(!currentPeriodPayroll || currentPeriodPayroll.status === 'draft') && (
                       <button
                         type="button"
-                        onClick={handleGenerateDraft}
+                        onClick={() => handleGenerateDraft()}
                         disabled={loading}
-                        className="nim-btn nim-btn--primary"
+                        className={`nim-btn ${
+                          currentPeriodPayroll?.needs_resync ? 'nim-btn--warn' : 'nim-btn--primary'
+                        }`}
                       >
-                        <Calculator className="h-3.5 w-3.5" />
+                        {currentPeriodPayroll?.needs_resync ? (
+                          <RefreshCw className="h-3.5 w-3.5" />
+                        ) : (
+                          <Calculator className="h-3.5 w-3.5" />
+                        )}
                         <span>
-                          {currentPeriodPayroll
+                          {currentPeriodPayroll?.needs_resync
+                            ? 'Sinkronkan Draf Sekarang'
+                            : currentPeriodPayroll
                             ? 'Kalkulasi Ulang Draf'
                             : 'Generate Draf Penggajian'}
                         </span>
@@ -948,6 +1217,41 @@ export function AdminDashboard({
                     )}
                   </div>
                 </div>
+
+                {currentPeriodPayroll?.status === 'draft' && currentPeriodPayroll?.needs_resync && (
+                  <div
+                    className="mt-3.5 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2.5"
+                    style={{
+                      background: 'var(--warn-soft)',
+                      boxShadow: 'inset 0 0 0 1px var(--warn-line)',
+                    }}
+                  >
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle
+                        className="h-4 w-4 shrink-0 mt-0.5"
+                        style={{ color: 'var(--warn-text)' }}
+                      />
+                      <div>
+                        <p className="text-xs font-bold" style={{ color: 'var(--warn-text)' }}>
+                          Draf perlu disinkronkan — terdapat perubahan data terbaru
+                        </p>
+                        <p className="text-[11px] text-[var(--ink-2)] mt-0.5">
+                          {(currentPeriodPayroll.resync_reasons || []).join(' • ')}. Angka draf tetap
+                          dipertahankan sampai Anda menekan tombol Sinkronkan Draf.
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleGenerateDraft()}
+                      disabled={loading}
+                      className="nim-btn nim-btn--warn nim-btn--sm"
+                    >
+                      <RefreshCw className="h-3.5 w-3.5" />
+                      <span>Sinkronkan Draf</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Payroll Periods List */}
@@ -958,20 +1262,36 @@ export function AdminDashboard({
                 <div className="fluid-container">
                   {payrolls.map((pr) => {
                     const badge = STATUS_BADGE[pr.status] || STATUS_BADGE.draft;
+                    const isDraftOutOfSync = pr.status === 'draft' && Boolean(pr.needs_resync);
                     return (
                       <div
                         key={pr.id}
                         className="fluid-item nim-glass nim-card flex flex-col justify-between gap-4"
+                        style={
+                          isDraftOutOfSync
+                            ? { boxShadow: 'inset 0 0 0 1px var(--warn-line), var(--shadow)' }
+                            : undefined
+                        }
                       >
                         <div>
-                          <div className="flex items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center justify-between gap-2">
                             <span className="text-base font-bold text-[var(--ink)]">
                               {getMonthName(pr.month)} {pr.year}
                             </span>
-                            <span className={badge.cls}>{badge.label}</span>
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              {isDraftOutOfSync && (
+                                <span className="nim-badge nim-badge--warn">
+                                  <AlertTriangle className="h-3 w-3" />
+                                  <span>Perlu Sinkronisasi</span>
+                                </span>
+                              )}
+                              <span className={badge.cls}>{badge.label}</span>
+                            </div>
                           </div>
                           <p className="mt-1 text-xs text-[var(--muted)]">
-                            Total anggaran gaji periode berjalan
+                            {isDraftOutOfSync
+                              ? `Perubahan terdeteksi: ${(pr.resync_reasons || []).join(' & ')}`
+                              : 'Total anggaran gaji periode berjalan'}
                           </p>
                           <p className="mt-3 text-xl sm:text-2xl font-bold text-[var(--ink)] tabular-nums">
                             {formatRupiah(pr.total_budget)}
@@ -990,6 +1310,18 @@ export function AdminDashboard({
                             <Eye className="h-3.5 w-3.5 text-[var(--accent-text)]" />
                             <span>Rincian Slip</span>
                           </button>
+
+                          {isDraftOutOfSync && (
+                            <button
+                              type="button"
+                              onClick={() => handleGenerateDraft(pr.month, pr.year)}
+                              disabled={loading}
+                              className="nim-btn nim-btn--primary"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                              <span>Sinkronkan Draf</span>
+                            </button>
+                          )}
 
                           {pr.status === 'draft' && (
                             <button
@@ -1887,7 +2219,7 @@ export function AdminDashboard({
             <DisbursementApprovalPanel
               role="admin"
               requests={disbursementRequests}
-              onRefresh={loadAllData}
+              onRefresh={() => refreshDomains(['disbursements'], { silent: false })}
             />
           )}
 
@@ -1938,7 +2270,12 @@ export function AdminDashboard({
         activeTab={activeTab}
         onChange={setActiveTab}
         tabs={[
-          { id: 'payroll', label: 'Penggajian', icon: Wallet },
+          {
+            id: 'payroll',
+            label: 'Penggajian',
+            icon: Wallet,
+            badge: outOfSyncDraftsCount > 0 ? outOfSyncDraftsCount : undefined,
+          },
           { id: 'attendance', label: 'Kehadiran', icon: CalendarCheck },
           {
             id: 'disbursements',

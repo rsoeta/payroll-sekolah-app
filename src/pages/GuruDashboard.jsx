@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion } from 'framer-motion';
 import {
   Banknote,
@@ -11,7 +11,13 @@ import {
   CalendarCheck,
   Mail,
 } from 'lucide-react';
-import api from '../services/gasApi';
+import api, { isActionUnsupported, markActionUnsupported } from '../services/gasApi';
+import {
+  publishNotificationsSnapshot,
+  seedServerVersions,
+  subscribeDataChange,
+} from '../services/realtimeSync';
+import { saveLocalSchoolProfile } from '../services/schoolProfileService';
 import notify from '../utils/notify';
 import {
   formatRupiah,
@@ -85,41 +91,191 @@ export function GuruDashboard({
   const [attendanceLogCount, setAttendanceLogCount] = useState(0);
   const [disbursementRequestsCount, setDisbursementRequestsCount] = useState(0);
   const [disbursementTargetPeriod, setDisbursementTargetPeriod] = useState(null);
+  const [prefetchedData, setPrefetchedData] = useState(null);
   const [loading, setLoading] = useState(false);
+
+  const defaultPeriodRef = useRef(null);
+  if (!defaultPeriodRef.current) {
+    const now = new Date();
+    defaultPeriodRef.current = { month: now.getMonth() + 1, year: now.getFullYear() };
+  }
+
+  const applyDisbursementsCount = useCallback((disbList) => {
+    const valid = Array.isArray(disbList) ? disbList : [];
+    setDisbursementRequestsCount(
+      valid.filter((r) => r.status !== 'rejected' && r.status !== 'approved').length
+    );
+    return valid;
+  }, []);
 
   const loadGuruData = useCallback(async () => {
     setLoading(true);
+    const curPeriod = defaultPeriodRef.current;
     try {
-      const now = new Date();
-      const [sumData, mySlips, myLogs, myDisbReqs] = await Promise.all([
-        api.get('dashboard.summary'),
-        api.get('payslips.myList'),
-        api
-          .get('attendanceLogs.list', {
-            month: now.getMonth() + 1,
-            year: now.getFullYear(),
-          })
-          .catch(() => []),
-        api.get('disbursements.list').catch(() => []),
-      ]);
-      setSummary(sumData);
-      setSlips(mySlips || []);
-      setAttendanceLogCount(Array.isArray(myLogs) ? myLogs.length : 0);
-      setDisbursementRequestsCount(
-        Array.isArray(myDisbReqs)
-          ? myDisbReqs.filter((r) => r.status !== 'rejected' && r.status !== 'approved').length
-          : 0
-      );
+      let loaded = false;
+      if (!isActionUnsupported('bootstrap.guru')) {
+        try {
+          const bundle = await api.get('bootstrap.guru', curPeriod);
+          if (bundle && typeof bundle === 'object') {
+            setSummary(bundle.summary || null);
+            setSlips(bundle.slips || []);
+            const logsArr = Array.isArray(bundle.attendanceLogs) ? bundle.attendanceLogs : [];
+            const attArr = Array.isArray(bundle.attendances) ? bundle.attendances : [];
+            const disbArr = applyDisbursementsCount(bundle.disbursements);
+            const estArr = Array.isArray(bundle.estimates) ? bundle.estimates : [];
+            setAttendanceLogCount(logsArr.length);
+            setPrefetchedData({
+              period: curPeriod,
+              attendanceLogs: logsArr,
+              attendanceSummary: attArr.length > 0 ? attArr[0] : null,
+              disbursements: disbArr,
+              estimates: estArr,
+            });
+            seedServerVersions(bundle.versions);
+            if (bundle.schoolProfile) {
+              saveLocalSchoolProfile(bundle.schoolProfile);
+            }
+            if (bundle.notifications) {
+              publishNotificationsSnapshot(bundle.notifications, { announceNew: false });
+            }
+            loaded = true;
+          }
+        } catch (bootErr) {
+          if (bootErr?.status === 404 || String(bootErr?.message || '').includes('404')) {
+            markActionUnsupported('bootstrap.guru');
+          } else {
+            throw bootErr;
+          }
+        }
+      }
+
+      if (!loaded) {
+        const [sumData, mySlips, myLogs, myDisbReqs] = await Promise.all([
+          api.get('dashboard.summary'),
+          api.get('payslips.myList'),
+          api.get('attendanceLogs.list', curPeriod).catch(() => []),
+          api.get('disbursements.list').catch(() => []),
+        ]);
+        const logsArr = Array.isArray(myLogs) ? myLogs : [];
+        const disbArr = applyDisbursementsCount(myDisbReqs);
+        setSummary(sumData);
+        setSlips(mySlips || []);
+        setAttendanceLogCount(logsArr.length);
+        setPrefetchedData({
+          period: curPeriod,
+          attendanceLogs: logsArr,
+          attendanceSummary: null,
+          disbursements: disbArr,
+          estimates: null,
+        });
+      }
     } catch (err) {
       notify.error(err.message || 'Gagal memuat slip gaji.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [applyDisbursementsCount]);
+
+  const refreshDomains = useCallback(
+    async (domains = []) => {
+      const domainSet = new Set(domains);
+      const curPeriod = defaultPeriodRef.current;
+      try {
+        const tasks = [];
+        if (domainSet.has('teachers') || domainSet.has('payrolls')) {
+          tasks.push(
+            api.get('dashboard.summary').then((sumData) => {
+              setSummary(sumData);
+            })
+          );
+        }
+        if (domainSet.has('payrolls') || domainSet.has('disbursements')) {
+          tasks.push(
+            api.get('payslips.myList').then((mySlips) => {
+              setSlips(mySlips || []);
+            })
+          );
+        }
+        if (domainSet.has('disbursements')) {
+          tasks.push(
+            api
+              .get('disbursements.list')
+              .catch(() => [])
+              .then((disbList) => {
+                const valid = applyDisbursementsCount(disbList);
+                setPrefetchedData((prev) =>
+                  prev ? { ...prev, disbursements: valid } : prev
+                );
+              })
+          );
+        }
+        if (domainSet.has('attendances')) {
+          tasks.push(
+            api
+              .get('attendanceLogs.list', curPeriod)
+              .catch(() => [])
+              .then((myLogs) => {
+                const logsArr = Array.isArray(myLogs) ? myLogs : [];
+                setAttendanceLogCount(logsArr.length);
+                setPrefetchedData((prev) =>
+                  prev ? { ...prev, attendanceLogs: logsArr } : prev
+                );
+              })
+          );
+        }
+        if (tasks.length > 0) {
+          await Promise.all(tasks);
+        }
+      } catch {
+        // Silent background refresh
+      }
+    },
+    [applyDisbursementsCount]
+  );
 
   useEffect(() => {
     loadGuruData();
   }, [loadGuruData, refreshTrigger]);
+
+  useEffect(() => {
+    return subscribeDataChange((domains, meta) => {
+      const relevant = [];
+      if (domains.includes('payrolls')) relevant.push('payrolls');
+      if (domains.includes('teachers')) relevant.push('teachers');
+      if (domains.includes('disbursements') && meta?.source !== 'guru_disb_local') {
+        relevant.push('disbursements');
+      }
+      if (domains.includes('attendances') && meta?.source !== 'guru_att_local') {
+        relevant.push('attendances');
+      }
+      if (relevant.length > 0) {
+        refreshDomains(relevant);
+      }
+    });
+  }, [refreshDomains]);
+
+  const handleDisbursementSectionChange = useCallback(
+    (updatedRequests) => {
+      if (Array.isArray(updatedRequests)) {
+        const valid = applyDisbursementsCount(updatedRequests);
+        setPrefetchedData((prev) =>
+          prev ? { ...prev, disbursements: valid } : prev
+        );
+      } else {
+        refreshDomains(['disbursements']);
+      }
+    },
+    [applyDisbursementsCount, refreshDomains]
+  );
+
+  const handleAttendanceSectionSync = useCallback((syncInfo) => {
+    if (syncInfo && Array.isArray(syncInfo.logs)) {
+      setAttendanceLogCount(syncInfo.logs.length);
+      setPrefetchedData((prev) =>
+        prev ? { ...prev, attendanceLogs: syncInfo.logs } : prev
+      );
+    }
+  }, []);
 
   useEffect(() => {
     onBadgesChange?.({
@@ -345,8 +501,10 @@ export function GuruDashboard({
         >
           <DisbursementRequestSection
             teacherProfile={teacherProfile}
-            initialPeriod={disbursementTargetPeriod}
-            onDisbursementChange={loadGuruData}
+            initialPeriod={disbursementTargetPeriod || prefetchedData?.period}
+            initialEstimates={prefetchedData?.estimates}
+            initialRequests={prefetchedData?.disbursements}
+            onDisbursementChange={handleDisbursementSectionChange}
           />
         </motion.section>
       )}
@@ -361,8 +519,11 @@ export function GuruDashboard({
         >
           <GuruSelfAttendanceSection
             teacherProfile={teacherProfile}
+            initialPeriod={prefetchedData?.period}
+            initialLogs={prefetchedData?.attendanceLogs}
+            initialAttendanceSummary={prefetchedData?.attendanceSummary}
             onLogsCountChange={setAttendanceLogCount}
-            onSyncComplete={loadGuruData}
+            onSyncComplete={handleAttendanceSectionSync}
           />
         </motion.section>
       )}

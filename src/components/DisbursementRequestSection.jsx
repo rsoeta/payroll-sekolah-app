@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Banknote,
   Calendar,
@@ -12,6 +12,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import api from '../services/gasApi';
+import { emitDataChange, subscribeDataChange } from '../services/realtimeSync';
 import notify from '../utils/notify';
 import {
   formatRibuan,
@@ -34,25 +35,38 @@ import { downloadPayslipPdf } from '../utils/pdfSlipGenerator';
 export function DisbursementRequestSection({
   teacherProfile,
   initialPeriod,
+  initialEstimates,
+  initialRequests,
   onDisbursementChange,
 }) {
-  const [estimates, setEstimates] = useState([]);
-  const [requests, setRequests] = useState([]);
+  const now = new Date();
+  const initialMonthVal = initialPeriod?.month
+    ? normalizePeriodKey(initialPeriod.month)
+    : String(now.getMonth() + 1);
+  const initialYearVal = initialPeriod?.year ? Number(initialPeriod.year) : now.getFullYear();
+
+  const hasPrefetchForInitial =
+    Array.isArray(initialEstimates) &&
+    Array.isArray(initialRequests) &&
+    Number(initialPeriod?.year || 0) === initialYearVal &&
+    normalizePeriodKey(initialPeriod?.month || '') === initialMonthVal;
+
+  const [estimates, setEstimates] = useState(() =>
+    hasPrefetchForInitial ? initialEstimates : []
+  );
+  const [requests, setRequests] = useState(() => (hasPrefetchForInitial ? initialRequests : []));
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const now = new Date();
-  const [selectedMonth, setSelectedMonth] = useState(
-    initialPeriod?.month ? normalizePeriodKey(initialPeriod.month) : String(now.getMonth() + 1)
-  );
-  const [selectedYear, setSelectedYear] = useState(
-    initialPeriod?.year ? Number(initialPeriod.year) : now.getFullYear()
-  );
+  const [selectedMonth, setSelectedMonth] = useState(initialMonthVal);
+  const [selectedYear, setSelectedYear] = useState(initialYearVal);
 
   const [requestScope, setRequestScope] = useState('partial');
   const [disbursementTiming, setDisbursementTiming] = useState('early');
   const [requestedAmount, setRequestedAmount] = useState(0);
   const [reason, setReason] = useState('');
+
+  const skipInitialFetchRef = useRef(hasPrefetchForInitial);
 
   useEffect(() => {
     if (initialPeriod?.month && initialPeriod?.year) {
@@ -61,26 +75,55 @@ export function DisbursementRequestSection({
     }
   }, [initialPeriod]);
 
-  const loadData = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [estList, reqList] = await Promise.all([
-        api.get('disbursements.estimates', { month: selectedMonth, year: selectedYear }),
-        api.get('disbursements.list'),
-      ]);
-      const validEstimates = Array.isArray(estList) ? estList : [];
-      const validReqs = Array.isArray(reqList) ? reqList : [];
-      setEstimates(validEstimates);
-      setRequests(validReqs);
-    } catch (err) {
-      notify.error(err.message || 'Gagal memuat data pengajuan pencairan.');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedMonth, selectedYear]);
+  const loadData = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) setLoading(true);
+      try {
+        const [estList, reqList] = await Promise.all([
+          api.get('disbursements.estimates', { month: selectedMonth, year: selectedYear }),
+          api.get('disbursements.list'),
+        ]);
+        const validEstimates = Array.isArray(estList) ? estList : [];
+        const validReqs = Array.isArray(reqList) ? reqList : [];
+        setEstimates(validEstimates);
+        setRequests(validReqs);
+        return { estimates: validEstimates, requests: validReqs };
+      } catch (err) {
+        if (!silent) {
+          notify.error(err.message || 'Gagal memuat data pengajuan pencairan.');
+        }
+        return null;
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [selectedMonth, selectedYear]
+  );
 
   useEffect(() => {
+    if (
+      skipInitialFetchRef.current &&
+      selectedMonth === initialMonthVal &&
+      selectedYear === initialYearVal
+    ) {
+      skipInitialFetchRef.current = false;
+      return;
+    }
     loadData();
+  }, [loadData, selectedMonth, selectedYear, initialMonthVal, initialYearVal]);
+
+  useEffect(() => {
+    return subscribeDataChange((domains, meta) => {
+      if (meta?.source === 'guru_disb_local') return;
+      if (
+        domains.includes('disbursements') ||
+        domains.includes('payrolls') ||
+        domains.includes('attendances') ||
+        domains.includes('teachers')
+      ) {
+        loadData({ silent: true });
+      }
+    });
   }, [loadData]);
 
   const activeEstimate = useMemo(() => {
@@ -154,8 +197,9 @@ export function DisbursementRequestSection({
         `Pengajuan pencairan ${formatRupiah(finalAmt)} berhasil dikirim!${emailNotice}`
       );
       setReason('');
-      await loadData();
-      onDisbursementChange?.();
+      const refreshed = await loadData({ silent: true });
+      emitDataChange(['disbursements', 'notifications'], { source: 'guru_disb_local' });
+      onDisbursementChange?.(refreshed?.requests);
     } catch (err) {
       notify.error(err.message || 'Gagal mengirim pengajuan pencairan.');
     } finally {

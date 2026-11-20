@@ -14,6 +14,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import api from '../services/gasApi';
+import { emitDataChange, subscribeDataChange } from '../services/realtimeSync';
 import notify from '../utils/notify';
 import ConfirmModal from './ConfirmModal';
 import { MONTHS_ID, formatRupiah, getSingleMonthName } from '../utils/formatters';
@@ -83,17 +84,31 @@ function createDefaultClassRowState(existingLog = null) {
 
 export function GuruSelfAttendanceSection({
   teacherProfile,
+  initialPeriod,
+  initialLogs,
+  initialAttendanceSummary,
   onLogsCountChange,
   onSyncComplete,
 }) {
   const todayIso = useMemo(() => getTodayIsoDate(), []);
   const initialDateParts = todayIso.split('-');
+  const initialMonthVal = Number(initialPeriod?.month) || Number(initialDateParts[1]) || 11;
+  const initialYearVal = Number(initialPeriod?.year) || Number(initialDateParts[0]) || 2026;
+  const hasPrefetchedLogs = Array.isArray(initialLogs);
 
-  const [selectedMonth, setSelectedMonth] = useState(Number(initialDateParts[1]) || 11);
-  const [selectedYear, setSelectedYear] = useState(Number(initialDateParts[0]) || 2026);
+  const [selectedMonth, setSelectedMonth] = useState(initialMonthVal);
+  const [selectedYear, setSelectedYear] = useState(initialYearVal);
 
-  const [logs, setLogs] = useState([]);
-  const [adminSummary, setAdminSummary] = useState(null);
+  const [logs, setLogs] = useState(() =>
+    hasPrefetchedLogs
+      ? initialLogs.map((row) => ({
+          ...row,
+          date: normalizeIsoDateOnly(row.date),
+          class_name: String(row.class_name || 'Kelas Umum').trim() || 'Kelas Umum',
+        }))
+      : []
+  );
+  const [adminSummary, setAdminSummary] = useState(() => initialAttendanceSummary || null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
 
@@ -107,6 +122,7 @@ export function GuruSelfAttendanceSection({
   const formRef = useRef(null);
   const classListRef = useRef(classList);
   classListRef.current = classList;
+  const skipInitialFetchRef = useRef(hasPrefetchedLogs);
 
   const buildChecklistStateForDate = useCallback((targetDate, sourceLogs, classes) => {
     const cleanTargetDate = normalizeIsoDateOnly(targetDate);
@@ -123,49 +139,73 @@ export function GuruSelfAttendanceSection({
     return nextState;
   }, []);
 
-  const loadPeriodAttendance = useCallback(async () => {
-    setLoading(true);
-    try {
-      const [logRows, attRows] = await Promise.all([
-        api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }),
-        api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
-      ]);
-      const normalizedLogs = (Array.isArray(logRows) ? logRows : []).map((row) => ({
-        ...row,
-        date: normalizeIsoDateOnly(row.date),
-        class_name: String(row.class_name || 'Kelas Umum').trim() || 'Kelas Umum',
-      }));
-      setLogs(normalizedLogs);
-      setAdminSummary(Array.isArray(attRows) && attRows.length > 0 ? attRows[0] : null);
-      onLogsCountChange?.(normalizedLogs.length);
+  const loadPeriodAttendance = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) setLoading(true);
+      try {
+        const [logRows, attRows] = await Promise.all([
+          api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }),
+          api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
+        ]);
+        const normalizedLogs = (Array.isArray(logRows) ? logRows : []).map((row) => ({
+          ...row,
+          date: normalizeIsoDateOnly(row.date),
+          class_name: String(row.class_name || 'Kelas Umum').trim() || 'Kelas Umum',
+        }));
+        setLogs(normalizedLogs);
+        setAdminSummary(Array.isArray(attRows) && attRows.length > 0 ? attRows[0] : null);
+        onLogsCountChange?.(normalizedLogs.length);
 
-      // Pastikan seluruh nama kelas yang ada pada riwayat log ikut muncul di checklist
-      const discoveredClasses = normalizedLogs
-        .map((l) => l.class_name)
-        .filter(Boolean);
-      if (discoveredClasses.length > 0) {
-        setClassList((prev) => {
-          const merged = [...prev];
-          let changed = false;
-          for (const cls of discoveredClasses) {
-            if (!merged.some((item) => item.toLowerCase() === cls.toLowerCase())) {
-              merged.push(cls);
-              changed = true;
+        // Pastikan seluruh nama kelas yang ada pada riwayat log ikut muncul di checklist
+        const discoveredClasses = normalizedLogs
+          .map((l) => l.class_name)
+          .filter(Boolean);
+        if (discoveredClasses.length > 0) {
+          setClassList((prev) => {
+            const merged = [...prev];
+            let changed = false;
+            for (const cls of discoveredClasses) {
+              if (!merged.some((item) => item.toLowerCase() === cls.toLowerCase())) {
+                merged.push(cls);
+                changed = true;
+              }
             }
-          }
-          if (changed) saveStoredClassList(merged);
-          return merged;
-        });
+            if (changed) saveStoredClassList(merged);
+            return merged;
+          });
+        }
+        return normalizedLogs;
+      } catch (err) {
+        if (!silent) {
+          notify.error(err.message || 'Gagal memuat catatan kehadiran & JTM.');
+        }
+        return null;
+      } finally {
+        if (!silent) setLoading(false);
       }
-    } catch (err) {
-      notify.error(err.message || 'Gagal memuat catatan kehadiran & JTM.');
-    } finally {
-      setLoading(false);
-    }
-  }, [selectedMonth, selectedYear, onLogsCountChange]);
+    },
+    [selectedMonth, selectedYear, onLogsCountChange]
+  );
 
   useEffect(() => {
+    if (
+      skipInitialFetchRef.current &&
+      selectedMonth === initialMonthVal &&
+      selectedYear === initialYearVal
+    ) {
+      skipInitialFetchRef.current = false;
+      return;
+    }
     loadPeriodAttendance();
+  }, [loadPeriodAttendance, selectedMonth, selectedYear, initialMonthVal, initialYearVal]);
+
+  useEffect(() => {
+    return subscribeDataChange((domains, meta) => {
+      if (meta?.source === 'guru_att_local') return;
+      if (domains.includes('attendances') || domains.includes('payrolls')) {
+        loadPeriodAttendance({ silent: true });
+      }
+    });
   }, [loadPeriodAttendance]);
 
   // Sinkronkan checklist ketika tanggal atau data `logs` berubah (tidak menimpa edit saat `classList` ditambah)
@@ -411,8 +451,9 @@ export function GuruSelfAttendanceSection({
         );
       }
       setEditingHighlightClass('');
-      await loadPeriodAttendance();
-      onSyncComplete?.();
+      const nextLogs = await loadPeriodAttendance({ silent: true });
+      emitDataChange(['attendances', 'disbursements'], { source: 'guru_att_local' });
+      onSyncComplete?.(nextLogs);
     } catch (err) {
       notify.error(err.message || 'Gagal menyimpan kehadiran per-kelas.');
     } finally {
@@ -429,8 +470,9 @@ export function GuruSelfAttendanceSection({
       );
       setDeleteTarget(null);
       setEditingHighlightClass('');
-      await loadPeriodAttendance();
-      onSyncComplete?.();
+      const nextLogs = await loadPeriodAttendance({ silent: true });
+      emitDataChange(['attendances', 'disbursements'], { source: 'guru_att_local' });
+      onSyncComplete?.(nextLogs);
     } catch (err) {
       notify.error(err.message || 'Gagal menghapus catatan kehadiran.');
     }

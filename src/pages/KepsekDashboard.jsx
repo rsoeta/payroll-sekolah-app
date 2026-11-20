@@ -13,7 +13,14 @@ import {
   Clock,
   X,
 } from 'lucide-react';
-import api from '../services/gasApi';
+import api, { isActionUnsupported, markActionUnsupported } from '../services/gasApi';
+import {
+  emitDataChange,
+  publishNotificationsSnapshot,
+  seedServerVersions,
+  subscribeDataChange,
+} from '../services/realtimeSync';
+import { saveLocalSchoolProfile } from '../services/schoolProfileService';
 import notify from '../utils/notify';
 import {
   formatRupiah,
@@ -66,24 +73,104 @@ export function KepsekDashboard({
     onConfirm: null,
   });
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async ({ silent = false } = {}) => {
     try {
-      const [payrollList, summary, disbList] = await Promise.all([
-        api.get('payrolls.list'),
-        api.get('dashboard.summary'),
-        api.get('disbursements.list').catch(() => []),
-      ]);
-      setPayrolls(payrollList || []);
-      setTeachersCount(summary?.totalTeachers || 0);
-      setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
+      let loaded = false;
+      if (!isActionUnsupported('bootstrap.kepsek')) {
+        try {
+          const bundle = await api.get('bootstrap.kepsek');
+          if (bundle && typeof bundle === 'object') {
+            setPayrolls(bundle.payrolls || []);
+            setTeachersCount(bundle.summary?.totalTeachers || 0);
+            setDisbursementRequests(
+              Array.isArray(bundle.disbursements) ? bundle.disbursements : []
+            );
+            seedServerVersions(bundle.versions);
+            if (bundle.schoolProfile) {
+              saveLocalSchoolProfile(bundle.schoolProfile);
+            }
+            if (bundle.notifications) {
+              publishNotificationsSnapshot(bundle.notifications, { announceNew: false });
+            }
+            loaded = true;
+          }
+        } catch (bootErr) {
+          if (bootErr?.status === 404 || String(bootErr?.message || '').includes('404')) {
+            markActionUnsupported('bootstrap.kepsek');
+          } else {
+            throw bootErr;
+          }
+        }
+      }
+
+      if (!loaded) {
+        const [payrollList, summary, disbList] = await Promise.all([
+          api.get('payrolls.list'),
+          api.get('dashboard.summary'),
+          api.get('disbursements.list').catch(() => []),
+        ]);
+        setPayrolls(payrollList || []);
+        setTeachersCount(summary?.totalTeachers || 0);
+        setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
+      }
     } catch (err) {
-      notify.error(err.message || 'Gagal memuat dasbor Kepala Sekolah.');
+      if (!silent) {
+        notify.error(err.message || 'Gagal memuat dasbor Kepala Sekolah.');
+      }
+    }
+  }, []);
+
+  const refreshDomains = useCallback(async (domains = []) => {
+    const domainSet = new Set(domains);
+    try {
+      const tasks = [];
+      if (domainSet.has('payrolls')) {
+        tasks.push(
+          api.get('payrolls.list').then((list) => {
+            setPayrolls(list || []);
+          })
+        );
+      }
+      if (domainSet.has('teachers')) {
+        tasks.push(
+          api.get('dashboard.summary').then((sum) => {
+            setTeachersCount(sum?.totalTeachers || 0);
+          })
+        );
+      }
+      if (domainSet.has('disbursements')) {
+        tasks.push(
+          api
+            .get('disbursements.list')
+            .catch(() => [])
+            .then((list) => {
+              setDisbursementRequests(Array.isArray(list) ? list : []);
+            })
+        );
+      }
+      if (tasks.length > 0) {
+        await Promise.all(tasks);
+      }
+    } catch {
+      // Silent background refresh
     }
   }, []);
 
   useEffect(() => {
     loadData();
   }, [loadData, refreshTrigger]);
+
+  useEffect(() => {
+    return subscribeDataChange((domains, meta) => {
+      if (meta?.source === 'kepsek_local') return;
+      const relevant = domains.filter((d) =>
+        ['payrolls', 'disbursements', 'teachers'].includes(d)
+      );
+      if (relevant.length > 0) {
+        refreshDomains(relevant);
+      }
+    });
+  }, [refreshDomains]);
 
   const handleInspect = useCallback(async (pr) => {
     try {
@@ -147,7 +234,8 @@ export function KepsekDashboard({
           if (selectedPayroll?.id === pr.id) {
             setSelectedPayroll(updated);
           }
-          loadData();
+          emitDataChange(['payrolls', 'notifications'], { source: 'kepsek_local' });
+          refreshDomains(['payrolls']);
         } catch (err) {
           notify.error(err.message || 'Gagal memproses otorisasi.');
         }
@@ -341,7 +429,7 @@ export function KepsekDashboard({
           <DisbursementApprovalPanel
             role="kepsek"
             requests={disbursementRequests}
-            onRefresh={loadData}
+            onRefresh={() => refreshDomains(['disbursements'])}
           />
         ) : (
           <AnimatePresence mode="wait">

@@ -16,6 +16,7 @@ import AdminDashboard from './pages/AdminDashboard';
 import KepsekDashboard from './pages/KepsekDashboard';
 import GuruDashboard from './pages/GuruDashboard';
 import api, { getSavedSession, clearSession } from './services/gasApi';
+import { resetRealtimeSyncState } from './services/realtimeSync';
 import notify from './utils/notify';
 
 const DEFAULT_TAB_BY_ROLE = {
@@ -53,6 +54,7 @@ export function App() {
       // Ignore network logout error and clear client session
     }
     clearSession();
+    resetRealtimeSyncState();
     setUser(null);
     setNavBadges({});
     setQuickSearchItems([]);
@@ -73,6 +75,7 @@ export function App() {
             label: 'Alur Penggajian',
             group: 'Penggajian',
             icon: Wallet,
+            badge: navBadges.payroll,
             description: 'Kalkulasi draf, pengajuan, dan pencairan gaji',
           },
           {

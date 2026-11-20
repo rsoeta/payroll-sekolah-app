@@ -808,9 +808,199 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       : null;
   };
 
-  switch (action) {
-    case 'auth.logout':
-      return { ok: true, status: 200, message: 'Logged out.' };
+  const ensureSyncMeta = () => {
+    if (!db._meta || typeof db._meta !== 'object') db._meta = {};
+    const v = db._meta.versions && typeof db._meta.versions === 'object' ? db._meta.versions : {};
+    db._meta.versions = {
+      teachers: Number(v.teachers || 1),
+      attendances: Number(v.attendances || 1),
+      payrolls: Number(v.payrolls || 1),
+      disbursements: Number(v.disbursements || 1),
+      notifications: Number(v.notifications || 1),
+      school_profile: Number(v.school_profile || 1),
+    };
+    if (
+      !db._meta.attendance_period_versions ||
+      typeof db._meta.attendance_period_versions !== 'object'
+    ) {
+      db._meta.attendance_period_versions = {};
+    }
+    if (!db._meta.draft_snapshots || typeof db._meta.draft_snapshots !== 'object') {
+      db._meta.draft_snapshots = {};
+    }
+    return db._meta;
+  };
+
+  const getEffectivePeriodAttVersion = (monthVal, yearVal) => {
+    const meta = ensureSyncMeta();
+    const parsed = parsePeriodMonthKey(monthVal);
+    const yr = Number(yearVal);
+    if (!yr) return 0;
+    const keys = Array.from(
+      new Set([`${yr}:${parsed.key}`, ...parsed.monthsInRange.map((m) => `${yr}:${m}`)])
+    );
+    return keys.reduce(
+      (sum, k) => sum + Number(meta.attendance_period_versions[k] || 0),
+      0
+    );
+  };
+
+  const bumpVersions = (domains, periodList = []) => {
+    const meta = ensureSyncMeta();
+    (Array.isArray(domains) ? domains : [domains]).forEach((d) => {
+      if (d && meta.versions[d] !== undefined) {
+        meta.versions[d] = Number(meta.versions[d] || 1) + 1;
+      }
+    });
+    if (Array.isArray(periodList)) {
+      periodList.forEach((p) => {
+        if (!p) return;
+        const pk = normalizePeriodKey(p.month);
+        const yr = Number(p.year);
+        if (!pk || !yr) return;
+        const pKey = `${yr}:${pk}`;
+        meta.attendance_period_versions[pKey] =
+          Number(meta.attendance_period_versions[pKey] || 0) + 1;
+      });
+    }
+    return { ...meta.versions };
+  };
+
+  const recordDraftSnapshot = (payrollId, monthVal, yearVal) => {
+    if (!payrollId) return;
+    const meta = ensureSyncMeta();
+    meta.draft_snapshots[String(payrollId)] = {
+      generated_at: new Date().toISOString(),
+      teachers_ver: Number(meta.versions.teachers || 1),
+      attendance_ver: getEffectivePeriodAttVersion(monthVal, yearVal),
+      period_key: `${Number(yearVal)}:${normalizePeriodKey(monthVal)}`,
+    };
+  };
+
+  const clearDraftSnapshot = (payrollId) => {
+    if (!payrollId) return;
+    const meta = ensureSyncMeta();
+    delete meta.draft_snapshots[String(payrollId)];
+  };
+
+  const enrichPayrollsWithSyncStatus = (payrollsList) => {
+    const meta = ensureSyncMeta();
+    const curTeachersVer = Number(meta.versions.teachers || 1);
+    return (payrollsList || []).map((p) => {
+      if (String(p.status) !== 'draft') {
+        return { ...p, needs_resync: false, resync_reasons: [] };
+      }
+      const snap = meta.draft_snapshots[String(p.id)] || {
+        teachers_ver: 1,
+        attendance_ver: 0,
+        generated_at: '',
+      };
+      const curAttVer = getEffectivePeriodAttVersion(p.month, p.year);
+      const reasons = [];
+      if (curTeachersVer > Number(snap.teachers_ver || 1)) {
+        reasons.push('Perubahan Master PTK / Komponen Gaji');
+      }
+      if (curAttVer > Number(snap.attendance_ver || 0)) {
+        reasons.push('Perubahan Kehadiran & JTM');
+      }
+      return {
+        ...p,
+        needs_resync: reasons.length > 0,
+        resync_reasons: reasons,
+        draft_generated_at: snap.generated_at || '',
+      };
+    });
+  };
+
+  const dispatchAction = (actionName, payload = {}) => {
+    switch (actionName) {
+      case 'auth.logout':
+        return { ok: true, status: 200, message: 'Logged out.' };
+
+      case 'sync.versions':
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            versions: { ...ensureSyncMeta().versions },
+            serverTime: new Date().toISOString(),
+          },
+        };
+
+      case 'bootstrap.admin': {
+        if (session.role !== 'admin') return forbidden();
+        const teachersRes = dispatchAction('teachers.list', {});
+        const payrollsRes = dispatchAction('payrolls.list', {});
+        const attendancesRes = dispatchAction('attendances.list', payload);
+        const logsRes = dispatchAction('attendanceLogs.list', payload);
+        const disbRes = dispatchAction('disbursements.list', {});
+        const notifRes = dispatchAction('notifications.list', {});
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            teachers: teachersRes.data || [],
+            payrolls: payrollsRes.data || [],
+            attendances: attendancesRes.data || [],
+            attendanceLogs: logsRes.data || [],
+            disbursements: disbRes.data || [],
+            notifications: notifRes.data || { items: [], unreadCount: 0 },
+            schoolProfile: db.School_Profile || null,
+            versions: { ...ensureSyncMeta().versions },
+          },
+        };
+      }
+
+      case 'bootstrap.kepsek': {
+        if (session.role !== 'kepsek') return forbidden();
+        const payrollsRes = dispatchAction('payrolls.list', {});
+        const summaryRes = dispatchAction('dashboard.summary', {});
+        const disbRes = dispatchAction('disbursements.list', {});
+        const notifRes = dispatchAction('notifications.list', {});
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            payrolls: payrollsRes.data || [],
+            summary: summaryRes.data || null,
+            disbursements: disbRes.data || [],
+            notifications: notifRes.data || { items: [], unreadCount: 0 },
+            schoolProfile: db.School_Profile || null,
+            versions: { ...ensureSyncMeta().versions },
+          },
+        };
+      }
+
+      case 'bootstrap.guru': {
+        if (session.role !== 'guru') return forbidden();
+        const now = new Date();
+        const periodQuery = {
+          month: payload.month || now.getMonth() + 1,
+          year: payload.year || now.getFullYear(),
+        };
+        const sumRes = dispatchAction('dashboard.summary', {});
+        const slipsRes = dispatchAction('payslips.myList', {});
+        const logsRes = dispatchAction('attendanceLogs.list', periodQuery);
+        const attRes = dispatchAction('attendances.list', periodQuery);
+        const disbRes = dispatchAction('disbursements.list', {});
+        const estRes = dispatchAction('disbursements.estimates', periodQuery);
+        const notifRes = dispatchAction('notifications.list', {});
+        return {
+          ok: true,
+          status: 200,
+          data: {
+            summary: sumRes.data || null,
+            slips: slipsRes.data || [],
+            attendanceLogs: logsRes.data || [],
+            attendances: attRes.data || [],
+            disbursements: disbRes.data || [],
+            estimates: estRes.data || [],
+            notifications: notifRes.data || { items: [], unreadCount: 0 },
+            schoolProfile: db.School_Profile || null,
+            versions: { ...ensureSyncMeta().versions },
+          },
+        };
+      }
 
     case 'dashboard.summary': {
       if (session.role === 'guru') {
@@ -943,6 +1133,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             : JSON.stringify(payload.custom_components || []),
       };
       db.Salary_Components.push(newComp);
+      bumpVersions(['teachers']);
       saveDb(db);
       return { ok: true, status: 201, data: { ...newTeacher, salary_component: newComp } };
     }
@@ -1038,6 +1229,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
               : prevComp.custom_components_json || '[]',
         };
       }
+      bumpVersions(['teachers']);
       saveDb(db);
       return { ok: true, status: 200, data: db.Teachers[idx] };
     }
@@ -1199,6 +1391,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         }
       }
 
+      if (createdCount > 0 || updatedCount > 0) {
+        bumpVersions(['teachers']);
+      }
       saveDb(db);
       return {
         ok: true,
@@ -1218,6 +1413,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           (u) => !(u.id === targetTeacher.user_id && u.role === 'guru')
         );
       }
+      bumpVersions(['teachers']);
       saveDb(db);
       return { ok: true, status: 200, message: 'Data guru berhasil dihapus.' };
     }
@@ -1296,8 +1492,57 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       } else {
         db.Attendances.push(record);
       }
+      bumpVersions(['attendances'], [{ month: targetKey, year: targetYear }]);
       saveDb(db);
       return { ok: true, status: 200, data: record };
+    }
+
+    case 'attendances.bulkUpsert': {
+      if (session.role !== 'admin') return forbidden();
+      const targetKey = normalizePeriodKey(payload.month);
+      const targetYear = Number(payload.year);
+      const items = Array.isArray(payload.items) ? payload.items : [];
+      if (!targetKey || !targetYear) {
+        return { ok: false, status: 400, error: 'Periode bulan dan tahun tidak valid.' };
+      }
+      const storedMonth = /^\d+$/.test(targetKey) ? Number(targetKey) : targetKey;
+      const savedRows = [];
+
+      items.forEach((item) => {
+        if (!item || !item.teacher_id) return;
+        const existingIdx = db.Attendances.findIndex(
+          (a) =>
+            a.teacher_id === item.teacher_id &&
+            normalizePeriodKey(a.month) === targetKey &&
+            Number(a.year) === targetYear
+        );
+        const record = {
+          id: existingIdx !== -1 ? db.Attendances[existingIdx].id : generateUuidV4(),
+          teacher_id: item.teacher_id,
+          month: storedMonth,
+          year: targetYear,
+          present_days: roundAttendanceMetric(item.present_days || 0),
+          absent_days: roundAttendanceMetric(item.absent_days || 0),
+          total_jtm: roundAttendanceMetric(item.total_jtm || 0),
+        };
+        if (existingIdx !== -1) {
+          db.Attendances[existingIdx] = record;
+        } else {
+          db.Attendances.push(record);
+        }
+        savedRows.push(record);
+      });
+
+      let versions = { ...ensureSyncMeta().versions };
+      if (savedRows.length > 0) {
+        versions = bumpVersions(['attendances'], [{ month: targetKey, year: targetYear }]);
+        saveDb(db);
+      }
+      return {
+        ok: true,
+        status: 200,
+        data: { saved: savedRows, count: savedRows.length, versions },
+      };
     }
 
     case 'attendanceLogs.list': {
@@ -1431,6 +1676,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         db.Attendances.push(attSummary);
       }
 
+      bumpVersions(['attendances'], [{ month: monthNum, year: yearNum }]);
       saveDb(db);
       return {
         ok: true,
@@ -1552,6 +1798,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         db.Attendances.push(attSummary);
       }
 
+      bumpVersions(['attendances'], [{ month: monthNum, year: yearNum }]);
       saveDb(db);
       return {
         ok: true,
@@ -1616,6 +1863,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         db.Attendances.push(attSummary);
       }
 
+      bumpVersions(['attendances'], [{ month: Number(target.month), year: Number(target.year) }]);
       saveDb(db);
       return {
         ok: true,
@@ -1712,6 +1960,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         lastSummary = attSummary;
       });
 
+      bumpVersions(['attendances'], Array.from(affectedPeriods.values()));
       saveDb(db);
       return {
         ok: true,
@@ -1722,7 +1971,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'payrolls.list': {
       if (session.role === 'guru') return forbidden();
-      return { ok: true, status: 200, data: db.Payrolls };
+      return { ok: true, status: 200, data: enrichPayrollsWithSyncStatus(db.Payrolls) };
     }
 
     case 'payrolls.generateDraft': {
@@ -1853,11 +2102,23 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         });
       }
       db.Payroll_Details.push(...newDetails);
+      recordDraftSnapshot(payrollId, targetKey, year);
+      const nextVersions = bumpVersions(['payrolls']);
       saveDb(db);
       return {
         ok: true,
         status: 200,
-        data: { id: payrollId, month: storedMonth, year, total_budget: totalBudget, status: 'draft' },
+        data: {
+          id: payrollId,
+          month: storedMonth,
+          year,
+          total_budget: totalBudget,
+          status: 'draft',
+          details: newDetails,
+          needs_resync: false,
+          resync_reasons: [],
+          versions: nextVersions,
+        },
       };
     }
 
@@ -1876,8 +2137,12 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       }
       if (!allowed) return forbidden();
       target.status = nextStatus;
+      if (nextStatus !== 'draft') {
+        clearDraftSnapshot(target.id);
+      }
+      bumpVersions(['payrolls']);
       saveDb(db);
-      return { ok: true, status: 200, data: target };
+      return { ok: true, status: 200, data: enrichPayrollsWithSyncStatus([target])[0] };
     }
 
     case 'payrollDetails.byPayroll': {
@@ -2384,6 +2649,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         created_at: nowIso,
       });
 
+      bumpVersions(['disbursements', 'notifications']);
       saveDb(db);
       return {
         ok: true,
@@ -2457,6 +2723,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         });
       }
 
+      bumpVersions(['disbursements', 'notifications']);
       saveDb(db);
       return { ok: true, status: 200, data: target };
     }
@@ -2495,6 +2762,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         created_at: nowIso,
       });
 
+      bumpVersions(['disbursements', 'notifications']);
       saveDb(db);
       return { ok: true, status: 200, data: updatedList };
     }
@@ -2607,6 +2875,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         );
       }
 
+      bumpVersions(['disbursements', 'notifications']);
       saveDb(db);
       return { ok: true, status: 200, data: target };
     }
@@ -2633,17 +2902,22 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'notifications.markRead': {
       const own = session.role === 'guru' ? getOwnedTeacher() : null;
+      let changed = false;
       (db.Notifications || []).forEach((n) => {
         const belongsToUser =
           session.role === 'guru'
             ? n.recipient_role === 'guru' && own && n.recipient_teacher_id === own.id
             : n.recipient_role === session.role;
         if (!belongsToUser) return;
-        if (payload.mark_all || (payload.id && n.id === payload.id)) {
+        if (!n.is_read && (payload.mark_all || (payload.id && n.id === payload.id))) {
           n.is_read = true;
+          changed = true;
         }
       });
-      saveDb(db);
+      if (changed) {
+        bumpVersions(['notifications']);
+        saveDb(db);
+      }
       return { ok: true, status: 200, data: { updated: true } };
     }
 
@@ -2653,11 +2927,15 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         ...(db.School_Profile || {}),
         ...payload,
       };
+      bumpVersions(['school_profile']);
       saveDb(db);
       return { ok: true, status: 200, data: db.School_Profile };
     }
 
     default:
       return notFound();
-  }
+    }
+  };
+
+  return dispatchAction(action, payload);
 }

@@ -1,4 +1,5 @@
 import api, { isLiveGasMode } from './gasApi';
+import { emitDataChange } from './realtimeSync';
 import { sanitizeClientString } from '../utils/formatters';
 
 const PROFILE_STORAGE_KEY = 'sipayroll_school_profile_v1';
@@ -20,6 +21,16 @@ export const DEFAULT_SCHOOL_PROFILE = {
 };
 
 const listeners = new Set();
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('storage', (e) => {
+    if (e.key === PROFILE_STORAGE_KEY && e.newValue) {
+      const next = getSchoolProfile();
+      applyProfileToDocumentHead(next);
+      listeners.forEach((cb) => cb(next));
+    }
+  });
+}
 
 export function getSchoolProfile() {
   if (typeof window === 'undefined') return { ...DEFAULT_SCHOOL_PROFILE };
@@ -128,6 +139,7 @@ export async function updateSchoolProfile(nextProfile) {
       // Ignore
     }
   }
+  emitDataChange(['school_profile'], { source: 'local' });
   return savedLocal;
 }
 
