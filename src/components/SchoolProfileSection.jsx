@@ -450,18 +450,18 @@ export function SchoolProfileSection() {
           </div>
         </div>
 
-        {/* 4. Konfigurasi Login Google OAuth (Whitelist Users_Auth.username) */}
+        {/* 4. Pengaturan Masuk dengan Akun Google */}
         <div className="space-y-3 pb-4" style={{ borderBottom: '1px solid var(--line)' }}>
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-4 w-4 text-[var(--good-text)]" />
             <h3 className="text-sm font-bold text-[var(--ink)]">
-              Konfigurasi Login Google OAuth (Whitelist Users_Auth.username)
+              Pengaturan Masuk dengan Akun Google
             </h3>
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-[var(--ink-2)]">
-              Google OAuth 2.0 Web Client ID
+              ID Aplikasi Masuk Google (Client ID)
             </label>
             <input
               type="text"
@@ -471,13 +471,13 @@ export function SchoolProfileSection() {
               className="nim-input mt-1 font-mono text-xs"
             />
             <p className="mt-1.5 text-[11px] text-[var(--muted)] leading-relaxed">
-              Disinkronkan untuk semua pengguna saat membuka halaman login. Pastikan origin{' '}
+              Diatur satu kali oleh pengelola sistem agar seluruh pengguna dapat masuk dengan Akun
+              Google di alamat{' '}
               <code className="px-1 py-0.5 rounded bg-[var(--card-2)] text-[var(--ink)]">
                 {typeof window !== 'undefined' ? window.location.origin : ''}
-              </code>{' '}
-              terdaftar pada <strong>Authorized JavaScript origins</strong> di Google Cloud Console.
-              Hanya email pada sheet <code>Users_Auth</code> kolom <code>username</code> yang dapat
-              masuk.
+              </code>
+              . Hanya akun email yang telah didaftarkan oleh Admin Sekolah yang diizinkan mengakses
+              portal.
             </p>
           </div>
         </div>

@@ -111,7 +111,7 @@ export function loadGoogleIdentityScript() {
       if (isGisReady()) {
         finishOk();
       } else {
-        finishErr('Layanan Google OAuth gagal dimuat tepat waktu. Muat ulang halaman dan coba lagi.');
+        finishErr('Layanan masuk Google gagal dimuat tepat waktu. Muat ulang halaman lalu coba lagi.');
       }
     }, 12000);
   });
@@ -122,7 +122,7 @@ export function loadGoogleIdentityScript() {
 export async function requestGoogleAccessToken(clientId, loginHint = '') {
   const cleanClientId = String(clientId || '').trim();
   if (!cleanClientId) {
-    throw new Error('Google OAuth Client ID belum dikonfigurasi.');
+    throw new Error('Layanan masuk dengan Google belum aktif. Silakan hubungi Admin Sekolah.');
   }
 
   await loadGoogleIdentityScript();
@@ -156,14 +156,14 @@ export async function requestGoogleAccessToken(clientId, loginHint = '') {
         if (settled) return;
         settled = true;
         if (err && err.type === 'popup_closed') {
-          reject(new Error('Popup login Google ditutup sebelum selesai.'));
+          reject(new Error('Popup masuk Google ditutup sebelum selesai.'));
           return;
         }
         if (err && err.type === 'popup_failed_to_open') {
-          reject(new Error('Popup login Google diblokir browser. Izinkan popup lalu coba lagi.'));
+          reject(new Error('Popup masuk Google diblokir browser. Izinkan popup lalu coba lagi.'));
           return;
         }
-        reject(new Error((err && err.message) || 'Gagal membuka jendela login Google OAuth.'));
+        reject(new Error((err && err.message) || 'Gagal membuka jendela masuk Google. Silakan coba lagi.'));
       },
     };
 

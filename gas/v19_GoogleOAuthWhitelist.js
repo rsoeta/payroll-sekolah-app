@@ -218,7 +218,7 @@ function processIncomingRpc(requestBody) {
   if (action === 'auth.requestOtp' && httpMethod === 'POST') {
     return buildJsonResponse(410, {
       ok: false,
-      error: 'Metode login kode OTP Gmail sudah dinonaktifkan. Gunakan tombol Login dengan Google OAuth.',
+      error: 'Metode masuk dengan kode email sudah tidak digunakan. Silakan masuk menggunakan Akun Google.',
     });
   }
   if (action === 'auth.login' && httpMethod === 'POST') {
@@ -502,7 +502,7 @@ function verifyGoogleIdentityOnServer(payload) {
         if (effectiveClientId && String(info.aud || '').trim() !== effectiveClientId) {
           return {
             ok: false,
-            error: 'Google OAuth Client ID tidak cocok dengan konfigurasi sekolah.',
+            error: 'Konfigurasi layanan masuk Google tidak sesuai. Silakan hubungi Admin Sekolah.',
           };
         }
         return {
@@ -515,7 +515,7 @@ function verifyGoogleIdentityOnServer(payload) {
     }
     return {
       ok: false,
-      error: 'Token ID Google tidak valid atau telah kedaluwarsa. Silakan ulangi Login dengan Google.',
+      error: 'Sesi masuk Google tidak valid atau telah kedaluwarsa. Silakan ulangi masuk dengan Google.',
     };
   }
 
@@ -528,7 +528,7 @@ function verifyGoogleIdentityOnServer(payload) {
       if (tRes.getResponseCode() !== 200) {
         return {
           ok: false,
-          error: 'Token akses Google OAuth tidak valid atau telah kedaluwarsa.',
+          error: 'Sesi masuk Google tidak valid atau telah kedaluwarsa. Silakan coba lagi.',
         };
       }
       var tInfo = {};
@@ -540,7 +540,7 @@ function verifyGoogleIdentityOnServer(payload) {
       if (String(tInfo.aud || '').trim() !== effectiveClientId) {
         return {
           ok: false,
-          error: 'Token akses Google OAuth bukan berasal dari Client ID aplikasi sekolah.',
+          error: 'Konfigurasi layanan masuk Google tidak sesuai. Silakan hubungi Admin Sekolah.',
         };
       }
     }
@@ -568,13 +568,13 @@ function verifyGoogleIdentityOnServer(payload) {
     }
     return {
       ok: false,
-      error: 'Gagal memverifikasi profil Akun Google melalui OAuth. Silakan coba lagi.',
+      error: 'Gagal memverifikasi Akun Google Anda. Silakan coba masuk kembali.',
     };
   }
 
   return {
     ok: false,
-    error: 'Autentikasi wajib menggunakan Login Google OAuth (Sign in with Google).',
+    error: 'Silakan masuk menggunakan tombol Akun Google resmi.',
   };
 }
 
@@ -593,8 +593,7 @@ function handleLogin(payload) {
   if (users.length === 0) {
     return buildJsonResponse(403, {
       ok: false,
-      error:
-        'Sheet Users_Auth masih kosong. Daftarkan alamat email Google Admin pada kolom Users_Auth.username terlebih dahulu.',
+      error: 'Belum ada akun pengelola yang terdaftar di sistem. Silakan hubungi administrator sekolah.',
     });
   }
 
@@ -606,7 +605,7 @@ function handleLogin(payload) {
       error:
         'Akses Ditolak: Akun Google "' +
         verifiedEmail +
-        '" tidak terdaftar pada whitelist Users_Auth.username. Hubungi Admin Sekolah untuk mendaftarkan email Anda.',
+        '" belum terdaftar sebagai pengguna resmi portal. Silakan hubungi Admin Sekolah untuk mendaftarkan email Anda.',
     });
   }
 
@@ -621,7 +620,7 @@ function handleLogin(payload) {
   if (!validRoles.includes(role)) {
     return buildJsonResponse(403, {
       ok: false,
-      error: 'Kolom role di Users_Auth harus bernilai: admin, kepsek, atau guru.',
+      error: 'Hak akses akun belum diatur dengan benar. Silakan hubungi Admin Sekolah.',
     });
   }
 

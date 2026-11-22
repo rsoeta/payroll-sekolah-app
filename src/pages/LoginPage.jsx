@@ -5,9 +5,7 @@ import {
   RefreshCw,
   Trash2,
   AlertCircle,
-  LogIn,
   KeyRound,
-  Copy,
   CheckCircle2,
 } from 'lucide-react';
 import api, { saveSession, isLiveGasMode } from '../services/gasApi';
@@ -19,9 +17,6 @@ import {
 } from '../services/schoolProfileService';
 import { getThemePreference, resolveTheme, subscribeTheme } from '../utils/theme';
 import {
-  getLocalGoogleClientId,
-  setLocalGoogleClientId,
-  isValidGoogleClientId,
   resolveGoogleClientId,
   loadGoogleIdentityScript,
   requestGoogleAccessToken,
@@ -103,6 +98,23 @@ function getInitials(nameOrEmail) {
   return clean.slice(0, 2).toUpperCase();
 }
 
+function formatLoginErrorMessage(err) {
+  const rawMessage = String(err?.message || '').trim();
+  const isDeniedStatus = Number(err?.status) === 403;
+  const exposesInternalOrTechnical =
+    /Users_Auth|whitelist|Client ID|OAuth|\baud\b|tokeninfo|id_token|access_token/i.test(
+      rawMessage
+    );
+
+  if (isDeniedStatus) {
+    return 'Akses ditolak: Akun Google Anda belum terdaftar sebagai pengguna resmi portal ini. Silakan hubungi Admin Sekolah untuk mendaftarkan email Anda.';
+  }
+  if (!rawMessage || exposesInternalOrTechnical) {
+    return 'Verifikasi Akun Google tidak berhasil. Silakan coba masuk kembali atau hubungi Admin Sekolah.';
+  }
+  return rawMessage;
+}
+
 function GoogleLogo({ className = 'h-4 w-4 shrink-0' }) {
   return (
     <svg className={className} viewBox="0 0 24 24" aria-hidden="true">
@@ -132,8 +144,6 @@ export function LoginPage({ onLoginSuccess }) {
   const [gisReady, setGisReady] = useState(false);
   const [gisError, setGisError] = useState('');
   const [containerWidth, setContainerWidth] = useState(320);
-  const [clientIdDraft, setClientIdDraft] = useState(() => getLocalGoogleClientId());
-  const [localClientIdVersion, setLocalClientIdVersion] = useState(0);
 
   const [schoolProfile, setSchoolProfile] = useState(() => getSchoolProfile());
   const [activeTheme, setActiveTheme] = useState(() => resolveTheme(getThemePreference()));
@@ -147,12 +157,6 @@ export function LoginPage({ onLoginSuccess }) {
   const liveMode = isLiveGasMode();
   const googleClientId = resolveGoogleClientId(schoolProfile);
   const hasValidClientId = Boolean(googleClientId && !googleClientId.startsWith('GANTI_DENGAN_'));
-  const isLocalOverrideClientId = Boolean(
-    !String(schoolProfile?.google_client_id || '').trim() &&
-      !(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim() &&
-      getLocalGoogleClientId()
-  );
-  const currentOrigin = typeof window !== 'undefined' ? window.location.origin : '';
 
   useEffect(() => {
     fetchSchoolProfileFromServer();
@@ -199,9 +203,7 @@ export function LoginPage({ onLoginSuccess }) {
         const result = await api.post('auth.login', oauthPayload);
         completeLoginSession(result, fallbackEmail);
       } catch (err) {
-        const msg =
-          err?.message ||
-          'Akun Google Anda belum terdaftar pada whitelist Users_Auth.username atau sesi OAuth gagal diverifikasi.';
+        const msg = formatLoginErrorMessage(err);
         setAuthError(msg);
         notify.error(msg);
       } finally {
@@ -214,7 +216,7 @@ export function LoginPage({ onLoginSuccess }) {
   idTokenHandlerRef.current = async (credentialResponse) => {
     const idToken = credentialResponse?.credential;
     if (!idToken) {
-      const msg = 'Kredensial Google OAuth tidak diterima. Silakan coba lagi.';
+      const msg = 'Verifikasi Akun Google tidak berhasil. Silakan coba masuk kembali.';
       setAuthError(msg);
       notify.error(msg);
       return;
@@ -240,7 +242,7 @@ export function LoginPage({ onLoginSuccess }) {
     }
     window.addEventListener('resize', measureWidth);
     return () => window.removeEventListener('resize', measureWidth);
-  }, [hasValidClientId, localClientIdVersion]);
+  }, [hasValidClientId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -285,17 +287,17 @@ export function LoginPage({ onLoginSuccess }) {
       .catch((err) => {
         if (cancelled) return;
         setGisReady(false);
-        setGisError(err?.message || 'Gagal memuat tombol Login Google.');
+        setGisError(err?.message || 'Gagal memuat tombol masuk Google.');
       });
 
     return () => {
       cancelled = true;
     };
-  }, [googleClientId, hasValidClientId, activeTheme, containerWidth, localClientIdVersion]);
+  }, [googleClientId, hasValidClientId, activeTheme, containerWidth]);
 
-  const handlePopupOAuthLogin = async (loginHint = '') => {
+  const handlePopupGoogleLogin = async (loginHint = '') => {
     if (!hasValidClientId) {
-      notify.warn('Google OAuth Client ID belum dikonfigurasi.');
+      notify.warn('Layanan masuk dengan Google belum aktif. Silakan hubungi Admin Sekolah.');
       return;
     }
     setLoading(true);
@@ -304,7 +306,7 @@ export function LoginPage({ onLoginSuccess }) {
       const accessToken = await requestGoogleAccessToken(googleClientId, loginHint);
       await authenticateWithGooglePayload({ access_token: accessToken }, loginHint);
     } catch (err) {
-      const msg = err?.message || 'Login Google OAuth dibatalkan atau gagal.';
+      const msg = formatLoginErrorMessage(err);
       setAuthError(msg);
       notify.error(msg);
       setLoading(false);
@@ -322,7 +324,7 @@ export function LoginPage({ onLoginSuccess }) {
       });
       completeLoginSession(result, acc.email, acc.name);
     } catch (err) {
-      const msg = err?.message || 'Gagal masuk pada mode simulasi.';
+      const msg = formatLoginErrorMessage(err);
       setAuthError(msg);
       notify.error(msg);
     } finally {
@@ -334,38 +336,6 @@ export function LoginPage({ onLoginSuccess }) {
     e.stopPropagation();
     const updated = removeRememberedGoogleAccount(email);
     setRememberedAccounts(updated);
-  };
-
-  const handleSaveLocalClientId = (e) => {
-    e.preventDefault();
-    const clean = String(clientIdDraft || '').trim();
-    if (!isValidGoogleClientId(clean)) {
-      notify.warn(
-        'Format Client ID harus berakhiran ".apps.googleusercontent.com" (diperoleh dari Google Cloud Console).'
-      );
-      return;
-    }
-    setLocalGoogleClientId(clean);
-    setLocalClientIdVersion((v) => v + 1);
-    setAuthError('');
-    notify.success('Google OAuth Client ID perangkat disimpan.');
-  };
-
-  const handleResetLocalClientId = () => {
-    setLocalGoogleClientId('');
-    setClientIdDraft('');
-    setLocalClientIdVersion((v) => v + 1);
-    setAuthError('');
-  };
-
-  const handleCopyOrigin = async () => {
-    if (!currentOrigin) return;
-    try {
-      await navigator.clipboard.writeText(currentOrigin);
-      notify.success(`Origin "${currentOrigin}" berhasil disalin.`);
-    } catch {
-      notify.info(`Origin aplikasi: ${currentOrigin}`);
-    }
   };
 
   return (
@@ -396,7 +366,7 @@ export function LoginPage({ onLoginSuccess }) {
               <div className="min-w-0">
                 <div className="nim-badge nim-badge--good">
                   <ShieldCheck className="h-3.5 w-3.5" />
-                  <span>Google OAuth • Whitelist</span>
+                  <span>Masuk Aman dengan Google</span>
                 </div>
                 <p className="mt-1.5 text-[11px] font-bold tracking-wider uppercase text-[var(--muted)] truncate">
                   {schoolProfile.foundation_name || 'SIPAYROLL • YAYASAN PENDIDIKAN'}
@@ -423,8 +393,9 @@ export function LoginPage({ onLoginSuccess }) {
                 style={{ background: 'var(--good)', boxShadow: '0 0 0 4px var(--good-soft)' }}
               />
               <span>
-                <strong className="text-[var(--ink)]">Login Google OAuth:</strong> Masuk satu klik
-                menggunakan Akun Google resmi Anda secara aman tanpa kata sandi maupun kode OTP.
+                <strong className="text-[var(--ink)]">Masuk Praktis dengan Akun Google:</strong>{' '}
+                Masuk satu klik menggunakan Akun Google resmi Anda secara aman tanpa perlu mengingat
+                kata sandi.
               </span>
             </div>
             <div className="flex items-start gap-2.5">
@@ -433,9 +404,9 @@ export function LoginPage({ onLoginSuccess }) {
                 style={{ background: 'var(--accent)', boxShadow: '0 0 0 4px var(--accent-soft)' }}
               />
               <span>
-                <strong className="text-[var(--ink)]">Whitelist Users_Auth.username:</strong> Hanya
-                alamat email Google yang terdaftar pada kolom <code>Users_Auth.username</code> oleh
-                Admin Sekolah yang diizinkan mengakses sistem.
+                <strong className="text-[var(--ink)]">Akses Khusus Pengguna Terdaftar:</strong>{' '}
+                Hanya akun Google resmi pendidik, staf, dan pengelola yang telah didaftarkan oleh
+                Admin Sekolah yang dapat mengakses portal.
               </span>
             </div>
             <div className="flex items-start gap-2.5">
@@ -451,7 +422,7 @@ export function LoginPage({ onLoginSuccess }) {
           </div>
         </div>
 
-        {/* Right Column: Frosted Glass Google OAuth Login Card */}
+        {/* Right Column: Frosted Glass Google Sign-In Card */}
         <div className="fluid-item nim-glass rounded-[26px] p-6 sm:p-8 flex flex-col justify-between">
           <div>
             <div className="flex items-center gap-3">
@@ -467,8 +438,7 @@ export function LoginPage({ onLoginSuccess }) {
               <div>
                 <h2 className="text-lg font-bold text-[var(--ink)]">Masuk dengan Akun Google</h2>
                 <p className="text-xs text-[var(--muted)]">
-                  Autentikasi Google OAuth resmi dengan validasi whitelist{' '}
-                  <code>Users_Auth.username</code>
+                  Gunakan Akun Google resmi Anda yang telah didaftarkan oleh pihak sekolah
                 </p>
               </div>
             </div>
@@ -500,13 +470,13 @@ export function LoginPage({ onLoginSuccess }) {
                         {rememberedAccounts.map((acc) => (
                           <div
                             key={acc.email}
-                            onClick={() => !loading && handlePopupOAuthLogin(acc.email)}
+                            onClick={() => !loading && handlePopupGoogleLogin(acc.email)}
                             role="button"
                             tabIndex={0}
                             onKeyDown={(e) => {
                               if ((e.key === 'Enter' || e.key === ' ') && !loading) {
                                 e.preventDefault();
-                                handlePopupOAuthLogin(acc.email);
+                                handlePopupGoogleLogin(acc.email);
                               }
                             }}
                             className="group inline-flex items-center gap-2 rounded-full pl-1.5 pr-1.5 py-1 text-[11px] cursor-pointer transition-colors"
@@ -542,17 +512,8 @@ export function LoginPage({ onLoginSuccess }) {
                     <div className="flex items-center justify-between gap-2 text-xs">
                       <span className="font-semibold text-[var(--ink-2)] flex items-center gap-1.5">
                         <CheckCircle2 className="h-3.5 w-3.5 text-[var(--good-text)]" />
-                        <span>Google OAuth Siap</span>
+                        <span>Layanan Masuk Google Aktif</span>
                       </span>
-                      {isLocalOverrideClientId && (
-                        <button
-                          type="button"
-                          onClick={handleResetLocalClientId}
-                          className="text-[11px] font-semibold text-[var(--accent-text)] hover:underline"
-                        >
-                          Ubah Client ID
-                        </button>
-                      )}
                     </div>
 
                     {/* Official Google Identity Services Button Container */}
@@ -564,7 +525,7 @@ export function LoginPage({ onLoginSuccess }) {
                       {!gisReady && !gisError && (
                         <div className="flex items-center gap-2 text-xs text-[var(--muted)] py-2">
                           <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-                          <span>Memuat tombol Google Sign-In...</span>
+                          <span>Memuat tombol masuk Google...</span>
                         </div>
                       )}
                       {gisError && (
@@ -585,7 +546,7 @@ export function LoginPage({ onLoginSuccess }) {
                     <button
                       type="button"
                       disabled={loading}
-                      onClick={() => handlePopupOAuthLogin('')}
+                      onClick={() => handlePopupGoogleLogin('')}
                       className="nim-btn w-full"
                     >
                       {loading ? (
@@ -602,69 +563,26 @@ export function LoginPage({ onLoginSuccess }) {
                     </button>
 
                     <p className="text-[11px] text-[var(--muted)] leading-relaxed text-center">
-                      Setelah verifikasi Google berhasil, sistem memeriksa email Anda pada sheet{' '}
-                      <code>Users_Auth</code> kolom <code>username</code>.
+                      Sistem secara otomatis memverifikasi keanggotaan akun Google Anda sesuai data
+                      resmi sekolah.
                     </p>
                   </div>
                 </>
               ) : (
-                <div className="nim-card-well p-4 sm:p-5 space-y-3.5">
+                <div className="nim-card-well p-4 sm:p-5 space-y-2.5">
                   <div className="flex items-start gap-2.5">
                     <KeyRound className="h-4 w-4 text-[var(--warn-text)] shrink-0 mt-0.5" />
                     <div>
                       <p className="text-xs font-bold text-[var(--ink)]">
-                        Konfigurasi Google OAuth Client ID Diperlukan
+                        Layanan Masuk dengan Google Belum Aktif
                       </p>
-                      <p className="text-[11px] text-[var(--muted)] mt-0.5 leading-relaxed">
-                        Untuk mengaktifkan tombol <strong>Login Google OAuth</strong> di mode live,
-                        pasang Web Client ID dari Google Cloud Console.
+                      <p className="text-[11px] text-[var(--muted)] mt-1 leading-relaxed">
+                        Akses masuk menggunakan Akun Google sedang dalam tahap penyiapan oleh
+                        pengelola sistem. Silakan hubungi Admin Sekolah agar layanan masuk segera
+                        diaktifkan.
                       </p>
                     </div>
                   </div>
-
-                  <ol className="list-decimal list-inside space-y-1.5 text-[11px] text-[var(--ink-2)] leading-relaxed">
-                    <li>
-                      Buka <strong>Google Cloud Console &rsaquo; APIs &amp; Services &rsaquo; Credentials</strong>,
-                      buat <strong>OAuth client ID (Web application)</strong>.
-                    </li>
-                    <li>
-                      Tambahkan origin berikut ke <strong>Authorized JavaScript origins</strong>:
-                      {currentOrigin && (
-                        <span className="mt-1 inline-flex items-center gap-1.5 rounded-lg px-2 py-1 bg-[var(--card-2)] border border-[var(--line)]">
-                          <code className="text-[10.5px] font-mono text-[var(--ink)]">
-                            {currentOrigin}
-                          </code>
-                          <button
-                            type="button"
-                            onClick={handleCopyOrigin}
-                            title="Salin origin"
-                            className="text-[var(--accent-text)] hover:opacity-80"
-                          >
-                            <Copy className="h-3 w-3" />
-                          </button>
-                        </span>
-                      )}
-                    </li>
-                    <li>
-                      Simpan Client ID di <code>VITE_GOOGLE_CLIENT_ID</code>, konstanta GAS{' '}
-                      <code>GOOGLE_OAUTH_CLIENT_ID</code>, menu <strong>Profil Sekolah</strong>,
-                      atau uji sementara di bawah ini:
-                    </li>
-                  </ol>
-
-                  <form onSubmit={handleSaveLocalClientId} className="space-y-2 pt-1">
-                    <input
-                      type="text"
-                      value={clientIdDraft}
-                      onChange={(e) => setClientIdDraft(e.target.value)}
-                      placeholder="1234567890-xxxx.apps.googleusercontent.com"
-                      className="nim-input font-mono text-xs"
-                    />
-                    <button type="submit" className="nim-btn nim-btn--primary w-full">
-                      <LogIn className="h-3.5 w-3.5" />
-                      <span>Aktifkan Google Sign-In di Perangkat Ini</span>
-                    </button>
-                  </form>
                 </div>
               )}
             </div>
@@ -675,7 +593,7 @@ export function LoginPage({ onLoginSuccess }) {
             <div className="mt-6 pt-5" style={{ borderTop: '1px solid var(--line)' }}>
               <div className="flex items-center gap-1.5 text-xs font-semibold text-[var(--muted)]">
                 <Sparkles className="h-4 w-4 text-[var(--warn)]" />
-                <span>Akses Cepat Whitelist Users_Auth.username (Mode Simulasi):</span>
+                <span>Akses Cepat Akun Terdaftar (Mode Simulasi):</span>
               </div>
               <div className="fluid-container mt-3 gap-2">
                 {DEFAULT_DEMO_ACCOUNTS.map((acc) => (

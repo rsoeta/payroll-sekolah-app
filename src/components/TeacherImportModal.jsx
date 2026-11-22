@@ -105,7 +105,7 @@ const GUIDE_ROWS = [
   ],
   [
     'email',
-    'Alamat email Google aktif PTK untuk whitelist login Google OAuth (Users_Auth.username) portal PTK.',
+    'Alamat email Google aktif PTK agar dapat masuk ke portal PTK (presensi, pengajuan pencairan, dan slip gaji).',
     'ahmad.fauzi@gmail.com',
   ],
 ];

@@ -522,7 +522,7 @@ async function verifyGoogleOAuthPayload(payload, db) {
         if (claims && claims.email && claims.email_verified !== false) {
           if (configuredClientId && String(claims.aud || '').trim() !== configuredClientId) {
             return {
-              error: 'Google OAuth Client ID tidak cocok dengan konfigurasi sekolah.',
+              error: 'Konfigurasi layanan masuk Google tidak sesuai. Silakan hubungi Admin Sekolah.',
             };
           }
           return {
@@ -536,7 +536,7 @@ async function verifyGoogleOAuthPayload(payload, db) {
         // Fall through
       }
     }
-    return { error: 'Token ID Google OAuth tidak valid atau kedaluwarsa.' };
+    return { error: 'Sesi masuk Google tidak valid atau telah kedaluwarsa. Silakan coba lagi.' };
   }
 
   // 2. Google OAuth2 Access Token
@@ -589,7 +589,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     return {
       ok: false,
       status: 410,
-      error: 'Metode login kode OTP Gmail sudah dinonaktifkan. Gunakan Login dengan Google OAuth.',
+      error: 'Metode masuk dengan kode email sudah tidak digunakan. Silakan masuk menggunakan Akun Google.',
     };
   }
 
@@ -602,7 +602,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         status: 401,
         error:
           (oauthProfile && oauthProfile.error) ||
-          'Autentikasi wajib menggunakan Login Google OAuth (Sign in with Google).',
+          'Silakan masuk menggunakan tombol Akun Google resmi.',
       };
     }
 
@@ -613,7 +613,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       return {
         ok: false,
         status: 403,
-        error: `Akses Ditolak: Akun Google "${rawEmail}" tidak terdaftar pada whitelist Users_Auth.username. Hubungi Admin Sekolah untuk mendaftarkan email Anda.`,
+        error: `Akses Ditolak: Akun Google "${rawEmail}" belum terdaftar sebagai pengguna resmi portal. Silakan hubungi Admin Sekolah untuk mendaftarkan email Anda.`,
       };
     }
 
