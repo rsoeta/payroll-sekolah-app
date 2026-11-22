@@ -211,7 +211,7 @@ export function TeacherFormModal({
                   <div className="flex items-center gap-1.5 shrink-0">
                     <Mail className="h-3.5 w-3.5 text-[var(--accent-text)]" />
                     <span className="text-[11.5px] font-bold text-[var(--ink)]">
-                      Gmail Portal:
+                      Email Google (Whitelist):
                     </span>
                   </div>
                   <input

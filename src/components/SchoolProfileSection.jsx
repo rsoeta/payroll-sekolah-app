@@ -7,6 +7,7 @@ import {
   FileDown,
   MapPin,
   Phone,
+  ShieldCheck,
   UserCheck,
   Image as ImageIcon,
 } from 'lucide-react';
@@ -446,6 +447,38 @@ export function SchoolProfileSection() {
               placeholder="Dokumen ini diterbitkan secara resmi dan sah oleh Sistem Penggajian Sekolah / Yayasan."
               className="nim-input mt-1"
             />
+          </div>
+        </div>
+
+        {/* 4. Konfigurasi Login Google OAuth (Whitelist Users_Auth.username) */}
+        <div className="space-y-3 pb-4" style={{ borderBottom: '1px solid var(--line)' }}>
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-[var(--good-text)]" />
+            <h3 className="text-sm font-bold text-[var(--ink)]">
+              Konfigurasi Login Google OAuth (Whitelist Users_Auth.username)
+            </h3>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-[var(--ink-2)]">
+              Google OAuth 2.0 Web Client ID
+            </label>
+            <input
+              type="text"
+              value={form.google_client_id || ''}
+              onChange={(e) => handleFieldChange('google_client_id', e.target.value.trim())}
+              placeholder="1234567890-xxxx.apps.googleusercontent.com"
+              className="nim-input mt-1 font-mono text-xs"
+            />
+            <p className="mt-1.5 text-[11px] text-[var(--muted)] leading-relaxed">
+              Disinkronkan untuk semua pengguna saat membuka halaman login. Pastikan origin{' '}
+              <code className="px-1 py-0.5 rounded bg-[var(--card-2)] text-[var(--ink)]">
+                {typeof window !== 'undefined' ? window.location.origin : ''}
+              </code>{' '}
+              terdaftar pada <strong>Authorized JavaScript origins</strong> di Google Cloud Console.
+              Hanya email pada sheet <code>Users_Auth</code> kolom <code>username</code> yang dapat
+              masuk.
+            </p>
           </div>
         </div>
 

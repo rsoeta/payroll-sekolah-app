@@ -488,62 +488,24 @@ export async function resetSandboxDb() {
   return getDb();
 }
 
-const SANDBOX_OTP_KEY = 'sipayroll_sandbox_otp_v1';
-
-function readSandboxOtpStore() {
-  try {
-    const raw = localStorage.getItem(SANDBOX_OTP_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeSandboxOtpStore(store) {
-  try {
-    localStorage.setItem(SANDBOX_OTP_KEY, JSON.stringify(store));
-  } catch {
-    // Ignore storage error
-  }
-}
-
-function findOrSyncUserByEmail(db, rawEmail) {
+function findWhitelistedUserByUsername(db, rawEmail) {
   const cleanEmail = String(rawEmail || '').trim().toLowerCase();
-  if (!cleanEmail) return null;
+  if (!cleanEmail || !cleanEmail.includes('@')) return null;
 
-  let user = db.Users_Auth.find(
-    (u) =>
-      String(u.email || u.username || '')
-        .trim()
-        .toLowerCase() === cleanEmail
+  return (
+    (db.Users_Auth || []).find(
+      (u) => String(u.username || '').trim().toLowerCase() === cleanEmail
+    ) || null
   );
-
-  if (!user) {
-    const matchedTeacher = db.Teachers.find(
-      (t) => String(t.email || '').trim().toLowerCase() === cleanEmail
-    );
-    if (matchedTeacher) {
-      user = {
-        id: matchedTeacher.user_id || generateUuidV4(),
-        username: cleanEmail,
-        email: cleanEmail,
-        password_hash: 'GMAIL_OTP_VERIFIED',
-        role: 'guru',
-      };
-      db.Users_Auth.push(user);
-      matchedTeacher.user_id = user.id;
-      saveDb(db);
-    }
-  }
-
-  return user || null;
 }
 
 /**
- * Verifies an optional Google OAuth2 JWT ID Token or Access Token,
- * or verifies the 6-digit Gmail OTP / Sandbox Demo Login.
+ * Verifies Google OAuth2 JWT ID Token or Access Token,
+ * or Simulation Quick Demo Login (subject to Users_Auth.username whitelist).
  */
-async function verifyGoogleOAuthPayload(payload) {
+async function verifyGoogleOAuthPayload(payload, db) {
+  const configuredClientId = String(db?.School_Profile?.google_client_id || '').trim();
+
   // 1. Google Identity Services ID Token (JWT)
   if (payload.id_token && typeof payload.id_token === 'string') {
     const parts = payload.id_token.split('.');
@@ -558,6 +520,11 @@ async function verifyGoogleOAuthPayload(payload) {
         );
         const claims = JSON.parse(decodedJson);
         if (claims && claims.email && claims.email_verified !== false) {
+          if (configuredClientId && String(claims.aud || '').trim() !== configuredClientId) {
+            return {
+              error: 'Google OAuth Client ID tidak cocok dengan konfigurasi sekolah.',
+            };
+          }
           return {
             email: String(claims.email).trim().toLowerCase(),
             name: claims.name || '',
@@ -569,6 +536,7 @@ async function verifyGoogleOAuthPayload(payload) {
         // Fall through
       }
     }
+    return { error: 'Token ID Google OAuth tidak valid atau kedaluwarsa.' };
   }
 
   // 2. Google OAuth2 Access Token
@@ -591,6 +559,7 @@ async function verifyGoogleOAuthPayload(payload) {
     } catch {
       // Fall through
     }
+    return { error: 'Gagal memverifikasi token akses Akun Google Anda.' };
   }
 
   // 3. Sandbox Demo Quick Login (hanya berlaku di Mode Simulasi)
@@ -606,41 +575,6 @@ async function verifyGoogleOAuthPayload(payload) {
     }
   }
 
-  // 4. Verifikasi Kode OTP 6-Digit Gmail (Mode Simulasi)
-  const cleanEmail = String(payload.email || '').trim().toLowerCase();
-  const inputOtp = String(payload.otp || '').trim();
-  if (cleanEmail && inputOtp) {
-    const store = readSandboxOtpStore();
-    const record = store[cleanEmail];
-    if (!record) {
-      return { error: 'Kode verifikasi tidak ditemukan atau sudah kedaluwarsa. Silakan minta kode baru.' };
-    }
-    if (Date.now() > Number(record.expiresAt || 0)) {
-      delete store[cleanEmail];
-      writeSandboxOtpStore(store);
-      return { error: 'Kode verifikasi telah kedaluwarsa. Silakan kirim ulang kode baru ke Gmail Anda.' };
-    }
-    if ((record.attempts || 0) >= 5) {
-      delete store[cleanEmail];
-      writeSandboxOtpStore(store);
-      return { error: 'Terlalu banyak percobaan salah. Silakan minta kode verifikasi baru.' };
-    }
-    if (String(record.otp) !== inputOtp) {
-      record.attempts = (record.attempts || 0) + 1;
-      store[cleanEmail] = record;
-      writeSandboxOtpStore(store);
-      return { error: 'Kode verifikasi 6 digit tidak sesuai. Periksa kembali kode Anda.' };
-    }
-    delete store[cleanEmail];
-    writeSandboxOtpStore(store);
-    return {
-      email: cleanEmail,
-      name: '',
-      picture: '',
-      email_verified: true,
-    };
-  }
-
   return null;
 }
 
@@ -650,67 +584,36 @@ async function verifyGoogleOAuthPayload(payload) {
 export async function executeSandboxRequest(method, action, token, payload = {}) {
   const db = await getDb();
 
-  // 1a. Minta Kode Verifikasi OTP 6-Digit ke Gmail (tervalidasi terhadap Users_Auth)
+  // 1a. OTP login endpoint retired in v19
   if (action === 'auth.requestOtp' && method === 'POST') {
-    const cleanEmail = String(payload.email || '').trim().toLowerCase();
-    if (!cleanEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
-      return {
-        ok: false,
-        status: 400,
-        error: 'Masukkan alamat email Gmail yang valid.',
-      };
-    }
-
-    const user = findOrSyncUserByEmail(db, cleanEmail);
-    if (!user) {
-      return {
-        ok: false,
-        status: 403,
-        error: `Akses Ditolak: Alamat Gmail "${cleanEmail}" belum terdaftar pada daftar akun (Users_Auth) oleh Admin Sekolah.`,
-      };
-    }
-
-    const otpCode = String(Math.floor(100000 + Math.random() * 900000));
-    const store = readSandboxOtpStore();
-    store[cleanEmail] = {
-      otp: otpCode,
-      expiresAt: Date.now() + 300 * 1000,
-      attempts: 0,
-    };
-    writeSandboxOtpStore(store);
-
     return {
-      ok: true,
-      status: 200,
-      data: {
-        email: cleanEmail,
-        expiresInSeconds: 300,
-        simulationOtp: otpCode,
-      },
+      ok: false,
+      status: 410,
+      error: 'Metode login kode OTP Gmail sudah dinonaktifkan. Gunakan Login dengan Google OAuth.',
     };
   }
 
-  // 1b. Verifikasi OTP / Login Gmail (Authorized against Users_Auth)
-  if ((action === 'auth.login' || action === 'auth.verifyOtp') && method === 'POST') {
-    const oauthProfile = await verifyGoogleOAuthPayload(payload);
+  // 1b. Google OAuth Login (Strict Whitelist against Users_Auth.username)
+  if (action === 'auth.login' && method === 'POST') {
+    const oauthProfile = await verifyGoogleOAuthPayload(payload, db);
     if (!oauthProfile || oauthProfile.error || !oauthProfile.email) {
       return {
         ok: false,
         status: 401,
         error:
           (oauthProfile && oauthProfile.error) ||
-          'Verifikasi Akun Gmail gagal atau kode OTP belum dimasukkan.',
+          'Autentikasi wajib menggunakan Login Google OAuth (Sign in with Google).',
       };
     }
 
     const rawEmail = oauthProfile.email;
-    const user = findOrSyncUserByEmail(db, rawEmail);
+    const user = findWhitelistedUserByUsername(db, rawEmail);
 
     if (!user) {
       return {
         ok: false,
         status: 403,
-        error: `Akses Ditolak: Akun Google "${rawEmail}" terverifikasi, namun belum terdaftar pada sheet Users_Auth oleh Admin.`,
+        error: `Akses Ditolak: Akun Google "${rawEmail}" tidak terdaftar pada whitelist Users_Auth.username. Hubungi Admin Sekolah untuk mendaftarkan email Anda.`,
       };
     }
 
@@ -747,7 +650,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     return {
       ok: true,
       status: 200,
-      version: 'v7_GoogleOAuth2_SSO (Sandbox)',
+      version: 'v19_GoogleOAuthWhitelist (Sandbox)',
       data: {
         token: encodedToken,
         expiresAt: sessionPayload.exp * 1000,

@@ -18,6 +18,7 @@ export const DEFAULT_SCHOOL_PROFILE = {
   slip_footer_note:
     'Dokumen ini diterbitkan secara resmi dan sah oleh Sistem Penggajian Sekolah / Yayasan.',
   logo_data_url: '/logo.png',
+  google_client_id: '',
 };
 
 const listeners = new Set();
@@ -104,6 +105,9 @@ export function saveLocalSchoolProfile(partialProfile) {
       partialProfile.logo_data_url !== undefined
         ? String(partialProfile.logo_data_url || '/logo.png').trim()
         : current.logo_data_url,
+    google_client_id: sanitizeClientString(
+      partialProfile.google_client_id ?? current.google_client_id
+    ),
   };
 
   localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(merged));
@@ -114,7 +118,11 @@ export function saveLocalSchoolProfile(partialProfile) {
 export async function fetchSchoolProfileFromServer() {
   try {
     const remote = await api.get('schoolProfile.get');
-    if (remote && typeof remote === 'object' && (remote.school_name || remote.foundation_name)) {
+    if (
+      remote &&
+      typeof remote === 'object' &&
+      (remote.school_name || remote.foundation_name || remote.google_client_id)
+    ) {
       return saveLocalSchoolProfile(remote);
     }
   } catch {

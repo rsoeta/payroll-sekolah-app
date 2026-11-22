@@ -14,6 +14,7 @@ import GlobalToast from './components/GlobalToast';
 import LoginPage from './pages/LoginPage';
 import api, { getSavedSession, clearSession } from './services/gasApi';
 import { resetRealtimeSyncState } from './services/realtimeSync';
+import { disableGoogleAutoSelect } from './utils/googleOAuth';
 import notify from './utils/notify';
 
 const AdminDashboard = React.lazy(() => import('./pages/AdminDashboard'));
@@ -65,6 +66,7 @@ export function App() {
     } catch {
       // Ignore network logout error and clear client session
     }
+    disableGoogleAutoSelect();
     clearSession();
     resetRealtimeSyncState();
     setUser(null);
