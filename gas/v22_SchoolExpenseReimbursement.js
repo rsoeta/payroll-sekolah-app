@@ -1907,6 +1907,12 @@ function normalizeDateStringGas(value) {
   return raw;
 }
 
+function getTodayDateStringGas() {
+  var scriptTz = Session.getScriptTimeZone() || '';
+  var tz = scriptTz.indexOf('Asia/') === 0 ? scriptTz : 'Asia/Jakarta';
+  return Utilities.formatDate(new Date(), tz, 'yyyy-MM-dd');
+}
+
 function getAttendanceLogsListDataGas(session, payload) {
   var records = readSheetRecords(SHEETS.ATTENDANCE_LOGS).map(function (r) {
     return Object.assign({}, r, {
@@ -1982,6 +1988,12 @@ function handleUpsertMyAttendanceLog(session, payload) {
   var monthNum = Number(dateMatch[2]);
   if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
     return buildJsonResponse(400, { ok: false, error: 'Tanggal kehadiran tidak valid.' });
+  }
+  if (rawDate > getTodayDateStringGas()) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Tanggal kehadiran tidak boleh melebihi hari ini.',
+    });
   }
 
   var status = normalizeAttendanceLogStatus(payload.status);
@@ -2091,6 +2103,12 @@ function handleSyncDateAttendanceLogs(session, payload) {
   var monthNum = Number(dateMatch[2]);
   if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
     return buildJsonResponse(400, { ok: false, error: 'Tanggal kehadiran tidak valid.' });
+  }
+  if (rawDate > getTodayDateStringGas()) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Tanggal kehadiran tidak boleh melebihi hari ini.',
+    });
   }
 
   if (isPeriodPayrollLocked(monthNum, yearNum)) {
@@ -4373,6 +4391,12 @@ function handleCreateReimbursement(session, payload) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
     return buildJsonResponse(400, { ok: false, error: 'Tanggal pembelian wajib format YYYY-MM-DD.' });
   }
+  if (expenseDate > getTodayDateStringGas()) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Tanggal pembelian tidak boleh melebihi hari ini.',
+    });
+  }
   var periodKey = normalizePeriodKey(payload.month);
   var year = Number(payload.year);
   if (!periodKey || !year || year < 2020 || year > 2100) {
@@ -4500,6 +4524,12 @@ function handleUpdateReimbursement(session, payload) {
   var expenseDate = sanitizeString(payload.expense_date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
     return buildJsonResponse(400, { ok: false, error: 'Tanggal pembelian wajib format YYYY-MM-DD.' });
+  }
+  if (expenseDate > getTodayDateStringGas()) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Tanggal pembelian tidak boleh melebihi hari ini.',
+    });
   }
   var periodKey = normalizePeriodKey(payload.month);
   var year = Number(payload.year);

@@ -26,6 +26,7 @@ import {
   parseRibuan,
 } from '../utils/formatters';
 import { formatIsoDateTimeIndo } from '../utils/disbursementHelpers';
+import { getTodayIsoDate, normalizeIsoDateOnly } from '../utils/attendanceHelpers';
 import {
   formatExpenseDateIndo,
   getReimbursementCategoryMeta,
@@ -34,15 +35,8 @@ import {
   REIMBURSEMENT_CATEGORIES,
 } from '../utils/reimbursementHelpers';
 import ConfirmModal from './ConfirmModal';
+import DatePicker from './DatePicker';
 import PaginationBar from './admin/PaginationBar';
-
-function getTodayIsoDate() {
-  const now = new Date();
-  const yyyy = now.getFullYear();
-  const mm = String(now.getMonth() + 1).padStart(2, '0');
-  const dd = String(now.getDate()).padStart(2, '0');
-  return `${yyyy}-${mm}-${dd}`;
-}
 
 export function GuruReimbursementSection({
   teacherProfile,
@@ -129,8 +123,14 @@ export function GuruReimbursementSection({
   }, [defaultMonth, defaultYear]);
 
   const handleExpenseDateChange = (val) => {
-    setExpenseDate(val);
-    const match = String(val || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    let cleanVal = normalizeIsoDateOnly(val) || String(val || '').trim();
+    const todayMax = getTodayIsoDate();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(cleanVal) && cleanVal > todayMax) {
+      notify.warn('Tanggal pembelian tidak boleh melebihi hari ini.');
+      cleanVal = todayMax;
+    }
+    setExpenseDate(cleanVal);
+    const match = String(cleanVal || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
     if (match && !editingId && !periodManuallyPicked) {
       const yNum = Number(match[1]);
       const mNum = Number(match[2]);
@@ -155,9 +155,13 @@ export function GuruReimbursementSection({
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    const cleanDate = String(expenseDate || '').trim();
+    const cleanDate = normalizeIsoDateOnly(expenseDate);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
       notify.warn('Tanggal pembelian wajib diisi dengan format yang valid.');
+      return;
+    }
+    if (cleanDate > getTodayIsoDate()) {
+      notify.warn('Tanggal pembelian tidak boleh melebihi hari ini.');
       return;
     }
     const cleanTitle = String(title || '').trim();
@@ -292,54 +296,54 @@ export function GuruReimbursementSection({
   return (
     <div className="space-y-4">
       {/* Top KPI Summary Cards */}
-      <section className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+      <section className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 sm:gap-3">
         <div className="nim-glass nim-kpi">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start justify-between gap-1.5 sm:gap-2">
             <span className="nim-kpi__label">Menunggu Verifikasi</span>
             <span
-              className="nim-kpi__ico !w-8 !h-8"
+              className="nim-kpi__ico !w-7 !h-7 sm:!w-8 sm:!h-8"
               style={{ background: 'var(--warn-soft)', color: 'var(--warn-text)' }}
             >
-              <Clock className="h-4 w-4" />
+              <Clock className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </span>
           </div>
-          <p className="nim-kpi__value mt-2 text-[var(--warn-text)] tabular-nums truncate">
+          <p className="nim-kpi__value mt-1.5 sm:mt-2 text-[var(--warn-text)] tabular-nums truncate">
             {formatRupiah(kpiStats.pendingSum)}
           </p>
-          <p className="nim-kpi__sub mt-1">
+          <p className="nim-kpi__sub mt-0.5 sm:mt-1 leading-snug">
             {formatRibuan(kpiStats.pendingCount)} catatan sedang diproses
           </p>
         </div>
 
         <div className="nim-glass nim-kpi">
-          <div className="flex items-start justify-between gap-2">
+          <div className="flex items-start justify-between gap-1.5 sm:gap-2">
             <span className="nim-kpi__label">Piutang Disetujui (Masuk Slip)</span>
             <span
-              className="nim-kpi__ico !w-8 !h-8"
+              className="nim-kpi__ico !w-7 !h-7 sm:!w-8 sm:!h-8"
               style={{ background: 'var(--good-soft)', color: 'var(--good-text)' }}
             >
-              <CheckCircle2 className="h-4 w-4" />
+              <CheckCircle2 className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </span>
           </div>
-          <p className="nim-kpi__value mt-2 text-[var(--good-text)] tabular-nums truncate">
+          <p className="nim-kpi__value mt-1.5 sm:mt-2 text-[var(--good-text)] tabular-nums truncate">
             {formatRupiah(kpiStats.approvedSum)}
           </p>
-          <p className="nim-kpi__sub mt-1">
+          <p className="nim-kpi__sub mt-0.5 sm:mt-1 leading-snug">
             {formatRibuan(kpiStats.approvedCount)} nota diganti utuh (Bebas Infaq 2,5%)
           </p>
         </div>
 
-        <div className="nim-glass nim-kpi">
-          <div className="flex items-start justify-between gap-2">
+        <div className="nim-glass nim-kpi col-span-2 sm:col-span-1">
+          <div className="flex items-start justify-between gap-1.5 sm:gap-2">
             <span className="nim-kpi__label">Total Catatan Tercatat</span>
-            <span className="nim-kpi__ico !w-8 !h-8">
-              <Receipt className="h-4 w-4" />
+            <span className="nim-kpi__ico !w-7 !h-7 sm:!w-8 sm:!h-8">
+              <Receipt className="h-3.5 w-3.5 sm:h-4 sm:w-4" />
             </span>
           </div>
-          <p className="nim-kpi__value mt-2 tabular-nums">
+          <p className="nim-kpi__value mt-1.5 sm:mt-2 tabular-nums truncate">
             {formatRibuan(kpiStats.totalCount)} Nota
           </p>
-          <p className="nim-kpi__sub mt-1">
+          <p className="nim-kpi__sub mt-0.5 sm:mt-1 leading-snug truncate">
             {teacherProfile?.name ? `${teacherProfile.name} • ` : ''}
             {kpiStats.rejectedCount > 0 ? `${kpiStats.rejectedCount} ditolak` : 'Aktif'}
           </p>
@@ -378,15 +382,18 @@ export function GuruReimbursementSection({
           <form onSubmit={handleSubmit} className="space-y-3.5">
             <div className="grid grid-cols-12 gap-2.5">
               <div className="col-span-12 sm:col-span-5">
-                <label className="block text-xs font-semibold text-[var(--ink-2)] mb-1">
+                <label
+                  htmlFor="guru-reimb-date"
+                  className="block text-xs font-semibold text-[var(--ink-2)] mb-1"
+                >
                   Tanggal Pembelian
                 </label>
-                <input
-                  type="date"
-                  required
+                <DatePicker
+                  id="guru-reimb-date"
                   value={expenseDate}
-                  onChange={(e) => handleExpenseDateChange(e.target.value)}
-                  className="nim-input text-xs font-semibold"
+                  onChange={handleExpenseDateChange}
+                  maxDate={getTodayIsoDate()}
+                  className="text-xs font-semibold"
                 />
               </div>
 

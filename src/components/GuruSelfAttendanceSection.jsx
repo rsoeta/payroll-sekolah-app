@@ -17,6 +17,7 @@ import api from '../services/gasApi';
 import { emitDataChange, subscribeDataChange } from '../services/realtimeSync';
 import notify from '../utils/notify';
 import ConfirmModal from './ConfirmModal';
+import DatePicker from './DatePicker';
 import { MONTHS_ID, formatRupiah, getSingleMonthName } from '../utils/formatters';
 import {
   ATTENDANCE_CONDITIONS,
@@ -237,7 +238,12 @@ export function GuruSelfAttendanceSection({
   }, [classList, dateInput, logs]);
 
   const handleDateChange = (nextDate) => {
-    const isoDate = normalizeIsoDateOnly(nextDate) || nextDate;
+    let isoDate = normalizeIsoDateOnly(nextDate) || String(nextDate || '').trim();
+    const todayMax = getTodayIsoDate();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(isoDate) && isoDate > todayMax) {
+      notify.warn('Tanggal kehadiran tidak boleh melebihi hari ini.');
+      isoDate = todayMax;
+    }
     setEditingHighlightClass('');
     setDateInput(isoDate);
     const parts = String(isoDate || '').split('-');
@@ -423,8 +429,13 @@ export function GuruSelfAttendanceSection({
 
   const handleSaveDateChecklist = async (e) => {
     e.preventDefault();
-    if (!dateInput) {
+    const cleanDate = normalizeIsoDateOnly(dateInput);
+    if (!cleanDate || !/^\d{4}-\d{2}-\d{2}$/.test(cleanDate)) {
       notify.warn('Pilih tanggal kehadiran terlebih dahulu.');
+      return;
+    }
+    if (cleanDate > getTodayIsoDate()) {
+      notify.warn('Tanggal kehadiran tidak boleh melebihi hari ini.');
       return;
     }
     if (checkedEntries.length === 0 && logsExistingOnSelectedDate === 0) {
@@ -435,15 +446,15 @@ export function GuruSelfAttendanceSection({
     setSaving(true);
     try {
       await api.post('attendanceLogs.syncDateLogs', {
-        date: dateInput,
+        date: cleanDate,
         entries: checkedEntries,
       });
       if (checkedEntries.length === 0) {
-        notify.info(`Catatan kelas pada ${formatDateIndo(dateInput)} dikosongkan.`);
+        notify.info(`Catatan kelas pada ${formatDateIndo(cleanDate)} dikosongkan.`);
       } else {
         notify.success(
           `${checkedEntries.length} kelas (${formatDateIndo(
-            dateInput
+            cleanDate
           )}) tersimpan & langsung masuk ke rekap Admin.`
         );
       }
@@ -675,13 +686,12 @@ export function GuruSelfAttendanceSection({
                 >
                   Tanggal
                 </label>
-                <input
+                <DatePicker
                   id="guru-att-date"
-                  type="date"
-                  required
                   value={dateInput}
-                  onChange={(e) => handleDateChange(e.target.value)}
-                  className="nim-input mt-1 !w-auto text-xs font-semibold tabular-nums"
+                  onChange={handleDateChange}
+                  maxDate={getTodayIsoDate()}
+                  className="mt-1 !w-auto min-w-[175px] text-xs font-semibold"
                 />
               </div>
               <button

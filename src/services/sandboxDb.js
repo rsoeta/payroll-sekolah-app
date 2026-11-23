@@ -16,6 +16,7 @@ import {
 } from '../utils/formatters';
 import {
   computeAttendanceBreakdownFromLogs,
+  getTodayIsoDate,
   normalizeAttendanceStatus,
   normalizeLogValidationStatus,
   roundAttendanceMetric,
@@ -1784,6 +1785,13 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
         return { ok: false, status: 400, error: 'Tanggal kehadiran tidak valid.' };
       }
+      if (rawDate > getTodayIsoDate()) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Tanggal kehadiran tidak boleh melebihi hari ini.',
+        };
+      }
 
       const locked = (db.Payrolls || []).some((p) => {
         if (Number(p.year) !== yearNum || p.status === 'draft') return false;
@@ -1900,6 +1908,13 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       const monthNum = Number(dateMatch[2]);
       if (yearNum < 2020 || yearNum > 2100 || monthNum < 1 || monthNum > 12) {
         return { ok: false, status: 400, error: 'Tanggal kehadiran tidak valid.' };
+      }
+      if (rawDate > getTodayIsoDate()) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Tanggal kehadiran tidak boleh melebihi hari ini.',
+        };
       }
 
       const locked = (db.Payrolls || []).some((p) => {
@@ -3275,6 +3290,13 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
         return { ok: false, status: 400, error: 'Tanggal pembelian wajib format YYYY-MM-DD.' };
       }
+      if (expenseDate > getTodayIsoDate()) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Tanggal pembelian tidak boleh melebihi hari ini.',
+        };
+      }
       const periodKey = normalizePeriodKey(payload.month);
       const year = Number(payload.year);
       if (!periodKey || !year || year < 2020 || year > 2100) {
@@ -3379,6 +3401,13 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       const expenseDate = String(payload.expense_date || '').trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
         return { ok: false, status: 400, error: 'Tanggal pembelian wajib format YYYY-MM-DD.' };
+      }
+      if (expenseDate > getTodayIsoDate()) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Tanggal pembelian tidak boleh melebihi hari ini.',
+        };
       }
       const periodKey = normalizePeriodKey(payload.month);
       const year = Number(payload.year);
