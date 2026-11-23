@@ -117,6 +117,7 @@ export function DisbursementRequestSection({
       if (meta?.source === 'guru_disb_local') return;
       if (
         domains.includes('disbursements') ||
+        domains.includes('reimbursements') ||
         domains.includes('payrolls') ||
         domains.includes('attendances') ||
         domains.includes('teachers')
@@ -334,6 +335,19 @@ export function DisbursementRequestSection({
                         {formatRupiah(fullEstNet)}
                       </span>
                     </div>
+                    {Number(activeEstimate.reimbursement_total || 0) > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span style={{ color: 'var(--good-text)' }}>
+                          Termasuk Belanja Sekolah (Bebas Infaq)
+                        </span>
+                        <span
+                          className="font-semibold tabular-nums"
+                          style={{ color: 'var(--good-text)' }}
+                        >
+                          + {formatRupiah(activeEstimate.reimbursement_total)}
+                        </span>
+                      </div>
+                    )}
                     {alreadyApproved > 0 && (
                       <div className="flex items-center justify-between">
                         <span className="text-[var(--muted)]">Pencairan Disetujui Kepsek</span>

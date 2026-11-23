@@ -231,6 +231,23 @@ const DetailGroupCard = React.memo(function DetailGroupCard({
                       </>
                     );
                   })()}
+                  {Number(parsed.reimbursement_total || 0) > 0 && (
+                    <>
+                      <span style={{ color: 'var(--good-text)' }}>
+                        Penggantian Belanja Sekolah (Bebas Infaq
+                        {Number(parsed.reimbursement_count || 0) > 1
+                          ? ` • ${parsed.reimbursement_count} item`
+                          : ''}
+                        ):
+                      </span>
+                      <span
+                        className="text-right font-semibold tabular-nums"
+                        style={{ color: 'var(--good-text)' }}
+                      >
+                        + {formatRupiah(parsed.reimbursement_total)}
+                      </span>
+                    </>
+                  )}
                   {Number(parsed.approved_disbursement_total || 0) > 0 && (
                     <>
                       <span>
@@ -414,13 +431,14 @@ export const AdminPayrollTab = React.memo(function AdminPayrollTab({
                 }}
               >
                 Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan + Tunj (+) − Pot (−) − Infaq / Zakat
-                2,5% − Pencairan Disetujui Kepsek
+                2,5% + Belanja Sekolah (Non-Infaq) − Pencairan Disetujui Kepsek
               </code>
               <span className="mt-1 block text-[11px] text-[var(--muted)]">
                 Infaq / Zakat Profesi = 2,5% × [Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan +
-                Tunjangan Custom (Tunj +)]. Pengajuan pencairan PTK yang telah disetujui Kepala
-                Sekolah pada periode terkait otomatis memotong sisa gaji bersih &amp; total
-                anggaran draf.
+                Tunjangan Custom (Tunj +)]. Penggantian belanja sekolah yang telah disetujui Kepsek
+                ditambahkan utuh ke penerimaan bersih tanpa dipotong Infaq 2,5%. Pengajuan pencairan
+                PTK yang telah disetujui Kepala Sekolah pada periode terkait otomatis memotong sisa
+                gaji bersih &amp; total anggaran draf.
               </span>
             </p>
           </div>

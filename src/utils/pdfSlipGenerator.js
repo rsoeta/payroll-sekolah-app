@@ -149,6 +149,9 @@ function drawCompactPayslipSlot(
     details.gross_salary ??
       baseSalary + jtmHonor + positionAllowance + customSummary.totalCustomAllowance
   );
+  const reimbursementTotal = Math.max(0, Number(details.reimbursement_total || 0));
+  const reimbursementCount = Number(details.reimbursement_count || 0);
+  const totalEarnings = grossSalary + reimbursementTotal;
   const regularDeductions = infaqZakatDeduction + customSummary.totalCustomDeduction;
   const approvedDisbursementTotal = !isDisbursementSlip
     ? Math.max(0, Number(details.approved_disbursement_total || 0))
@@ -163,10 +166,10 @@ function drawCompactPayslipSlot(
         Number(
           details.estimated_net_salary ??
             details.net_salary_before_disbursement ??
-            grossSalary - regularDeductions
+            Math.max(0, grossSalary - regularDeductions) + reimbursementTotal
         )
       )
-    : Math.max(0, Number(details.net_salary ?? grossSalary - totalDeductions));
+    : Math.max(0, Number(details.net_salary ?? grossSalary + reimbursementTotal - totalDeductions));
 
   const disbursementScopeLabel =
     (details.request_scope || slipRecord.request_scope) === 'partial'
@@ -204,6 +207,17 @@ function drawCompactPayslipSlot(
       label: item.label,
       amount: item.amount,
     })),
+    ...(reimbursementTotal > 0
+      ? [
+          {
+            label:
+              reimbursementCount > 1
+                ? `Belanja Skl (${reimbursementCount}x)`
+                : 'Belanja Sekolah',
+            amount: reimbursementTotal,
+          },
+        ]
+      : []),
   ];
 
   const deductionRows = [
@@ -380,7 +394,7 @@ function drawCompactPayslipSlot(
     doc.setFont(fontFamily, 'bold');
     doc.setFontSize(9);
     doc.text('Total (A)', colLeftEqX - 3, totalRowY);
-    doc.text(formatAmountCell(grossSalary), colLeftAmtX, totalRowY, { align: 'right' });
+    doc.text(formatAmountCell(totalEarnings), colLeftAmtX, totalRowY, { align: 'right' });
 
     doc.text('Total (B)', colRightEqX - 3, totalRowY);
     doc.text(formatAmountCell(totalDeductions), colRightAmtX, totalRowY, { align: 'right' });

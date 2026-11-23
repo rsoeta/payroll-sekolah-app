@@ -9,6 +9,7 @@ export const SYNC_DOMAINS = [
   'attendances',
   'payrolls',
   'disbursements',
+  'reimbursements',
   'notifications',
   'school_profile',
 ];

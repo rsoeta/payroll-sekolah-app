@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import {
   Banknote,
   FileDown,
+  Receipt,
   ShieldCheck,
   Wallet,
   CreditCard,
@@ -38,6 +39,7 @@ import {
 import FloatingTabBar from '../components/FloatingTabBar';
 import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
 import DisbursementRequestSection from '../components/DisbursementRequestSection';
+import GuruReimbursementSection from '../components/GuruReimbursementSection';
 
 const SLIP_STATUS_META = {
   draft: {
@@ -90,6 +92,7 @@ export function GuruDashboard({
   const [slips, setSlips] = useState([]);
   const [attendanceLogCount, setAttendanceLogCount] = useState(0);
   const [disbursementRequestsCount, setDisbursementRequestsCount] = useState(0);
+  const [reimbursementsCount, setReimbursementsCount] = useState(0);
   const [disbursementTargetPeriod, setDisbursementTargetPeriod] = useState(null);
   const [prefetchedData, setPrefetchedData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -108,6 +111,15 @@ export function GuruDashboard({
     return valid;
   }, []);
 
+  const applyReimbursementsCount = useCallback((reimbList) => {
+    const valid = Array.isArray(reimbList) ? reimbList : [];
+    setReimbursementsCount(
+      valid.filter((r) => r.status === 'pending_treasurer' || r.status === 'approved_treasurer')
+        .length
+    );
+    return valid;
+  }, []);
+
   const loadGuruData = useCallback(async () => {
     setLoading(true);
     const curPeriod = defaultPeriodRef.current;
@@ -122,6 +134,7 @@ export function GuruDashboard({
             const logsArr = Array.isArray(bundle.attendanceLogs) ? bundle.attendanceLogs : [];
             const attArr = Array.isArray(bundle.attendances) ? bundle.attendances : [];
             const disbArr = applyDisbursementsCount(bundle.disbursements);
+            const reimbArr = applyReimbursementsCount(bundle.reimbursements);
             const estArr = Array.isArray(bundle.estimates) ? bundle.estimates : [];
             setAttendanceLogCount(logsArr.length);
             setPrefetchedData({
@@ -129,6 +142,7 @@ export function GuruDashboard({
               attendanceLogs: logsArr,
               attendanceSummary: attArr.length > 0 ? attArr[0] : null,
               disbursements: disbArr,
+              reimbursements: reimbArr,
               estimates: estArr,
             });
             seedServerVersions(bundle.versions);
@@ -150,14 +164,16 @@ export function GuruDashboard({
       }
 
       if (!loaded) {
-        const [sumData, mySlips, myLogs, myDisbReqs] = await Promise.all([
+        const [sumData, mySlips, myLogs, myDisbReqs, myReimbs] = await Promise.all([
           api.get('dashboard.summary'),
           api.get('payslips.myList'),
           api.get('attendanceLogs.list', curPeriod).catch(() => []),
           api.get('disbursements.list').catch(() => []),
+          api.get('reimbursements.list').catch(() => []),
         ]);
         const logsArr = Array.isArray(myLogs) ? myLogs : [];
         const disbArr = applyDisbursementsCount(myDisbReqs);
+        const reimbArr = applyReimbursementsCount(myReimbs);
         setSummary(sumData);
         setSlips(mySlips || []);
         setAttendanceLogCount(logsArr.length);
@@ -166,6 +182,7 @@ export function GuruDashboard({
           attendanceLogs: logsArr,
           attendanceSummary: null,
           disbursements: disbArr,
+          reimbursements: reimbArr,
           estimates: null,
         });
       }
@@ -174,7 +191,7 @@ export function GuruDashboard({
     } finally {
       setLoading(false);
     }
-  }, [applyDisbursementsCount]);
+  }, [applyDisbursementsCount, applyReimbursementsCount]);
 
   const refreshDomains = useCallback(
     async (domains = []) => {
@@ -185,7 +202,8 @@ export function GuruDashboard({
         if (
           domainSet.has('teachers') ||
           domainSet.has('payrolls') ||
-          domainSet.has('disbursements')
+          domainSet.has('disbursements') ||
+          domainSet.has('reimbursements')
         ) {
           tasks.push(
             api.get('dashboard.summary').then((sumData) => {
@@ -193,7 +211,11 @@ export function GuruDashboard({
             })
           );
         }
-        if (domainSet.has('payrolls') || domainSet.has('disbursements')) {
+        if (
+          domainSet.has('payrolls') ||
+          domainSet.has('disbursements') ||
+          domainSet.has('reimbursements')
+        ) {
           tasks.push(
             api.get('payslips.myList').then((mySlips) => {
               setSlips(mySlips || []);
@@ -209,6 +231,19 @@ export function GuruDashboard({
                 const valid = applyDisbursementsCount(disbList);
                 setPrefetchedData((prev) =>
                   prev ? { ...prev, disbursements: valid } : prev
+                );
+              })
+          );
+        }
+        if (domainSet.has('reimbursements')) {
+          tasks.push(
+            api
+              .get('reimbursements.list')
+              .catch(() => [])
+              .then((reimbList) => {
+                const valid = applyReimbursementsCount(reimbList);
+                setPrefetchedData((prev) =>
+                  prev ? { ...prev, reimbursements: valid } : prev
                 );
               })
           );
@@ -234,7 +269,7 @@ export function GuruDashboard({
         // Silent background refresh
       }
     },
-    [applyDisbursementsCount]
+    [applyDisbursementsCount, applyReimbursementsCount]
   );
 
   useEffect(() => {
@@ -248,6 +283,9 @@ export function GuruDashboard({
       if (domains.includes('teachers')) relevant.push('teachers');
       if (domains.includes('disbursements') && meta?.source !== 'guru_disb_local') {
         relevant.push('disbursements');
+      }
+      if (domains.includes('reimbursements') && meta?.source !== 'guru_reimb_local') {
+        relevant.push('reimbursements');
       }
       if (domains.includes('attendances') && meta?.source !== 'guru_att_local') {
         relevant.push('attendances');
@@ -272,6 +310,20 @@ export function GuruDashboard({
     [applyDisbursementsCount, refreshDomains]
   );
 
+  const handleReimbursementSectionChange = useCallback(
+    (updatedItems) => {
+      if (Array.isArray(updatedItems)) {
+        const valid = applyReimbursementsCount(updatedItems);
+        setPrefetchedData((prev) =>
+          prev ? { ...prev, reimbursements: valid } : prev
+        );
+      } else {
+        refreshDomains(['reimbursements']);
+      }
+    },
+    [applyReimbursementsCount, refreshDomains]
+  );
+
   const handleAttendanceSectionSync = useCallback((syncInfo) => {
     if (syncInfo && Array.isArray(syncInfo.logs)) {
       setAttendanceLogCount(syncInfo.logs.length);
@@ -286,8 +338,15 @@ export function GuruDashboard({
       slips: slips.length,
       attendance: attendanceLogCount > 0 ? attendanceLogCount : undefined,
       disbursements: disbursementRequestsCount > 0 ? disbursementRequestsCount : undefined,
+      reimbursements: reimbursementsCount > 0 ? reimbursementsCount : undefined,
     });
-  }, [slips.length, attendanceLogCount, disbursementRequestsCount, onBadgesChange]);
+  }, [
+    slips.length,
+    attendanceLogCount,
+    disbursementRequestsCount,
+    reimbursementsCount,
+    onBadgesChange,
+  ]);
 
   useEffect(() => {
     if (!onSearchItemsChange) return;
@@ -307,6 +366,14 @@ export function GuruDashboard({
         sub: 'Pengajuan pencairan sebagian/penuh sebelum waktunya atau kolektif',
         icon: Banknote,
         run: () => setActiveTab('disbursements'),
+      },
+      {
+        id: 'guru-tab:reimbursements',
+        group: 'Menu Portal Guru',
+        title: 'Belanja Sekolah (Penggantian)',
+        sub: 'Catat pengeluaran keperluan sekolah untuk diganti di slip gaji bebas Infaq 2,5%',
+        icon: Receipt,
+        run: () => setActiveTab('reimbursements'),
       },
       ...slips.map((slip) => ({
         id: `slip:${slip.id}`,
@@ -350,6 +417,11 @@ export function GuruDashboard({
           title: 'Pengajuan Pencairan Estimasi Gaji',
           desc: 'Ajukan pencairan sebagian atau seluruh estimasi gaji Anda (awal waktu maupun kolektif tepat waktu).',
         }
+      : activeTab === 'reimbursements'
+      ? {
+          title: 'Catatan Belanja Keperluan Sekolah',
+          desc: 'Catat pembelian keperluan sekolah yang Anda talangi agar diganti penuh di slip gaji tanpa potongan Infaq 2,5%.',
+        }
       : activeTab === 'profile'
       ? {
           title: 'Profil Pendidik',
@@ -387,6 +459,24 @@ export function GuruDashboard({
               <>
                 <Banknote className="h-3.5 w-3.5" />
                 <span>Ajukan Pencairan</span>
+              </>
+            )}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab(activeTab === 'reimbursements' ? 'slips' : 'reimbursements')}
+            className="nim-btn text-xs"
+          >
+            {activeTab === 'reimbursements' ? (
+              <>
+                <Wallet className="h-3.5 w-3.5" />
+                <span>Lihat Slip Gaji</span>
+              </>
+            ) : (
+              <>
+                <Receipt className="h-3.5 w-3.5" />
+                <span>Belanja Sekolah</span>
               </>
             )}
           </button>
@@ -531,6 +621,23 @@ export function GuruDashboard({
             initialEstimates={prefetchedData?.estimates}
             initialRequests={prefetchedData?.disbursements}
             onDisbursementChange={handleDisbursementSectionChange}
+          />
+        </motion.section>
+      )}
+
+      {/* School Expense Reimbursement Section */}
+      {activeTab === 'reimbursements' && (
+        <motion.section
+          key="guru-reimbursements"
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+        >
+          <GuruReimbursementSection
+            teacherProfile={teacherProfile}
+            initialPeriod={prefetchedData?.period}
+            initialItems={prefetchedData?.reimbursements}
+            onReimbursementsChange={handleReimbursementSectionChange}
           />
         </motion.section>
       )}
@@ -744,6 +851,23 @@ export function GuruDashboard({
                           </div>
                         );
                       })()}
+                      {Number(d.reimbursement_total || 0) > 0 && (
+                        <div
+                          className="flex justify-between"
+                          style={{ color: 'var(--good-text)' }}
+                        >
+                          <span>
+                            Penggantian Belanja Sekolah (Bebas Infaq
+                            {Number(d.reimbursement_count || 0) > 1
+                              ? ` • ${d.reimbursement_count} item`
+                              : ''}
+                            )
+                          </span>
+                          <span className="font-semibold tabular-nums">
+                            + {formatRupiah(d.reimbursement_total)}
+                          </span>
+                        </div>
+                      )}
                       {approvedDisbTotal > 0 && (
                         <div
                           className="flex justify-between"
@@ -873,6 +997,12 @@ export function GuruDashboard({
             label: 'Pencairan',
             icon: Banknote,
             badge: disbursementRequestsCount > 0 ? disbursementRequestsCount : undefined,
+          },
+          {
+            id: 'reimbursements',
+            label: 'Belanja',
+            icon: Receipt,
+            badge: reimbursementsCount > 0 ? reimbursementsCount : undefined,
           },
           {
             id: 'attendance',

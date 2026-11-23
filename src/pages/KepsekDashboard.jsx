@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Banknote,
@@ -7,6 +7,7 @@ import {
   RotateCcw,
   Eye,
   FileDown,
+  Receipt,
   Search,
   ShieldAlert,
   Wallet,
@@ -38,6 +39,10 @@ import DisbursementApprovalPanel from '../components/DisbursementApprovalPanel';
 import PaginationBar from '../components/admin/PaginationBar';
 import { downloadBatchPayslipsPdf } from '../utils/pdfSlipLoader';
 
+const ReimbursementApprovalPanel = React.lazy(() =>
+  import('../components/ReimbursementApprovalPanel')
+);
+
 const STATUS_META = {
   draft: { label: 'Draf Bendahara', cls: 'nim-badge' },
   submitted: {
@@ -64,6 +69,7 @@ export function KepsekDashboard({
 
   const [payrolls, setPayrolls] = useState([]);
   const [disbursementRequests, setDisbursementRequests] = useState([]);
+  const [reimbursementRequests, setReimbursementRequests] = useState([]);
   const [teachersCount, setTeachersCount] = useState(0);
   const [selectedPayroll, setSelectedPayroll] = useState(null);
   const [details, setDetails] = useState([]);
@@ -93,6 +99,9 @@ export function KepsekDashboard({
             setDisbursementRequests(
               Array.isArray(bundle.disbursements) ? bundle.disbursements : []
             );
+            setReimbursementRequests(
+              Array.isArray(bundle.reimbursements) ? bundle.reimbursements : []
+            );
             seedServerVersions(bundle.versions);
             if (bundle.schoolProfile) {
               saveLocalSchoolProfile(bundle.schoolProfile);
@@ -112,14 +121,16 @@ export function KepsekDashboard({
       }
 
       if (!loaded) {
-        const [payrollList, summary, disbList] = await Promise.all([
+        const [payrollList, summary, disbList, reimbList] = await Promise.all([
           api.get('payrolls.list'),
           api.get('dashboard.summary'),
           api.get('disbursements.list').catch(() => []),
+          api.get('reimbursements.list').catch(() => []),
         ]);
         setPayrolls(payrollList || []);
         setTeachersCount(summary?.totalTeachers || 0);
         setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
+        setReimbursementRequests(Array.isArray(reimbList) ? reimbList : []);
       }
     } catch (err) {
       if (!silent) {
@@ -156,6 +167,16 @@ export function KepsekDashboard({
             })
         );
       }
+      if (domainSet.has('reimbursements')) {
+        tasks.push(
+          api
+            .get('reimbursements.list')
+            .catch(() => [])
+            .then((list) => {
+              setReimbursementRequests(Array.isArray(list) ? list : []);
+            })
+        );
+      }
       if (tasks.length > 0) {
         await Promise.all(tasks);
       }
@@ -172,7 +193,7 @@ export function KepsekDashboard({
     return subscribeDataChange((domains, meta) => {
       if (meta?.source === 'kepsek_local') return;
       const relevant = domains.filter((d) =>
-        ['payrolls', 'disbursements', 'teachers'].includes(d)
+        ['payrolls', 'disbursements', 'reimbursements', 'teachers'].includes(d)
       );
       if (relevant.length > 0) {
         refreshDomains(relevant);
@@ -196,13 +217,17 @@ export function KepsekDashboard({
   const pendingKepsekDisbCount = disbursementRequests.filter(
     (r) => r.status === 'approved_treasurer'
   ).length;
+  const pendingKepsekReimbCount = reimbursementRequests.filter(
+    (r) => r.status === 'approved_treasurer'
+  ).length;
 
   useEffect(() => {
     onBadgesChange?.({
       submitted: pendingList.length,
       disbursements: pendingKepsekDisbCount > 0 ? pendingKepsekDisbCount : undefined,
+      reimbursements: pendingKepsekReimbCount > 0 ? pendingKepsekReimbCount : undefined,
     });
-  }, [pendingList.length, pendingKepsekDisbCount, onBadgesChange]);
+  }, [pendingList.length, pendingKepsekDisbCount, pendingKepsekReimbCount, onBadgesChange]);
 
   useEffect(() => {
     if (!onSearchItemsChange) return;
@@ -414,6 +439,42 @@ export function KepsekDashboard({
         </div>
       )}
 
+      {pendingKepsekReimbCount > 0 && activeTab !== 'reimbursements' && (
+        <div
+          className="nim-glass rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
+          style={{
+            background: 'var(--good-soft)',
+            boxShadow: 'inset 0 0 0 1px var(--good-line)',
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <span
+              className="nim-kpi__ico !w-8 !h-8"
+              style={{ background: 'rgba(16, 185, 129, 0.2)', color: 'var(--good-text)' }}
+            >
+              <Receipt className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-xs sm:text-sm font-bold text-[var(--ink)]">
+                Ada {pendingKepsekReimbCount} Belanja Sekolah PTK Terverifikasi Bendahara
+              </p>
+              <p className="text-[11px] text-[var(--ink-2)]">
+                Berikan otorisasi akhir agar penggantian biaya masuk ke slip gaji PTK bebas Infaq
+                2,5%.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('reimbursements')}
+            className="nim-btn nim-btn--good nim-btn--sm"
+          >
+            <Receipt className="h-3.5 w-3.5" />
+            <span>Tinjau Belanja Sekolah ({pendingKepsekReimbCount})</span>
+          </button>
+        </div>
+      )}
+
       {/* Pending Approvals Highlight */}
       <section className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
@@ -448,6 +509,12 @@ export function KepsekDashboard({
                 label: 'Pencairan PTK',
                 icon: Banknote,
                 badge: pendingKepsekDisbCount,
+              },
+              {
+                id: 'reimbursements',
+                label: 'Belanja Sekolah',
+                icon: Receipt,
+                badge: pendingKepsekReimbCount,
               },
             ].map((tabItem) => {
               const TabIcon = tabItem.icon;
@@ -500,6 +567,20 @@ export function KepsekDashboard({
             requests={disbursementRequests}
             onRefresh={() => refreshDomains(['disbursements'])}
           />
+        ) : activeTab === 'reimbursements' ? (
+          <Suspense
+            fallback={
+              <div className="nim-glass nim-card p-6 text-center text-sm text-[var(--muted)]">
+                Memuat panel otorisasi belanja sekolah...
+              </div>
+            }
+          >
+            <ReimbursementApprovalPanel
+              role="kepsek"
+              items={reimbursementRequests}
+              onRefresh={() => refreshDomains(['reimbursements'])}
+            />
+          </Suspense>
         ) : (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -616,7 +697,7 @@ export function KepsekDashboard({
       </section>
 
       {/* Breakdown Inspector */}
-      {activeTab !== 'disbursements' && selectedPayroll && (
+      {activeTab !== 'disbursements' && activeTab !== 'reimbursements' && selectedPayroll && (
         <section className="nim-glass nim-card space-y-4">
           <div
             className="flex items-center justify-between pb-3"
@@ -775,6 +856,23 @@ export function KepsekDashboard({
                         </>
                       );
                     })()}
+                    {Number(d.reimbursement_total || 0) > 0 && (
+                      <>
+                        <span style={{ color: 'var(--good-text)' }}>
+                          Penggantian Belanja Sekolah (Bebas Infaq
+                          {Number(d.reimbursement_count || 0) > 1
+                            ? ` • ${d.reimbursement_count} item`
+                            : ''}
+                          ):
+                        </span>
+                        <span
+                          className="text-right font-semibold tabular-nums"
+                          style={{ color: 'var(--good-text)' }}
+                        >
+                          + {formatRupiah(d.reimbursement_total)}
+                        </span>
+                      </>
+                    )}
                     {Number(d.approved_disbursement_total || 0) > 0 && (
                       <>
                         <span>
@@ -855,6 +953,12 @@ export function KepsekDashboard({
             label: 'Pencairan PTK',
             icon: Banknote,
             badge: pendingKepsekDisbCount > 0 ? pendingKepsekDisbCount : undefined,
+          },
+          {
+            id: 'reimbursements',
+            label: 'Belanja',
+            icon: Receipt,
+            badge: pendingKepsekReimbCount > 0 ? pendingKepsekReimbCount : undefined,
           },
           { id: 'approved', label: 'Disetujui', icon: CheckCircle2 },
         ]}

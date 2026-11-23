@@ -5,6 +5,7 @@ import {
   CalendarCheck,
   CheckCircle2,
   Clock,
+  Receipt,
   ShieldCheck,
   Users,
   Wallet,
@@ -108,6 +109,14 @@ export function App() {
             description: 'Review pengajuan pencairan sebagian/penuh PTK',
           },
           {
+            id: 'reimbursements',
+            label: 'Belanja Sekolah',
+            group: 'Penggajian',
+            icon: Receipt,
+            badge: navBadges.reimbursements,
+            description: 'Verifikasi penggantian belanja keperluan sekolah oleh PTK',
+          },
+          {
             id: 'teachers',
             label: 'Master PTK & Gaji',
             group: 'Data & Institusi',
@@ -155,6 +164,14 @@ export function App() {
             badge: navBadges.disbursements,
             description: 'Otorisasi pengajuan pencairan PTK & terbitkan slip',
           },
+          {
+            id: 'reimbursements',
+            label: 'Belanja Sekolah',
+            group: 'Otorisasi Kepsek',
+            icon: Receipt,
+            badge: navBadges.reimbursements,
+            description: 'Otorisasi final penggantian belanja keperluan sekolah oleh PTK',
+          },
         ];
       case 'guru':
         return [
@@ -181,6 +198,14 @@ export function App() {
             icon: Banknote,
             badge: navBadges.disbursements,
             description: 'Ajukan pencairan sebagian/seluruh estimasi gaji',
+          },
+          {
+            id: 'reimbursements',
+            label: 'Belanja Sekolah',
+            group: 'Portal PTK',
+            icon: Receipt,
+            badge: navBadges.reimbursements,
+            description: 'Catat pembelian keperluan sekolah untuk diganti di slip gaji (Bebas Infaq)',
           },
           {
             id: 'profile',

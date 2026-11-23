@@ -7,6 +7,7 @@ import {
   Building2,
   Banknote,
   Bell,
+  Receipt,
 } from 'lucide-react';
 import api, { isActionUnsupported, markActionUnsupported } from '../services/gasApi';
 import {
@@ -38,6 +39,9 @@ const AdminAttendanceTab = React.lazy(() => import('../components/admin/AdminAtt
 const AdminTeachersTab = React.lazy(() => import('../components/admin/AdminTeachersTab'));
 const DisbursementApprovalPanel = React.lazy(() =>
   import('../components/DisbursementApprovalPanel')
+);
+const ReimbursementApprovalPanel = React.lazy(() =>
+  import('../components/ReimbursementApprovalPanel')
 );
 const SchoolProfileSection = React.lazy(() => import('../components/SchoolProfileSection'));
 const DataArchiveSection = React.lazy(() => import('../components/admin/DataArchiveSection'));
@@ -86,6 +90,11 @@ const TAB_HEADER_META = {
     title: 'Persetujuan Pencairan Estimasi Gaji PTK',
     desc: 'Tinjau dan setujui pengajuan pencairan sebagian/penuh PTK (awal waktu maupun kolektif) sebelum otorisasi Kepsek.',
   },
+  reimbursements: {
+    eyebrow: 'Penggantian Biaya Sekolah',
+    title: 'Verifikasi Belanja Keperluan Sekolah PTK',
+    desc: 'Periksa catatan belanja sekolah yang ditalangi PTK, sesuaikan nominal atau periode slip bila perlu, lalu teruskan ke Kepsek (Bebas Infaq 2,5%).',
+  },
 };
 
 const INITIAL_TEACHER_FORM = {
@@ -120,6 +129,7 @@ export function AdminDashboard({
   const [attendances, setAttendances] = useState([]);
   const [attendanceLogs, setAttendanceLogs] = useState([]);
   const [disbursementRequests, setDisbursementRequests] = useState([]);
+  const [reimbursementRequests, setReimbursementRequests] = useState([]);
   const [validatingKey, setValidatingKey] = useState('');
   const [startMonth, setStartMonth] = useState(11);
   const [endMonth, setEndMonth] = useState(11);
@@ -217,11 +227,13 @@ export function AdminDashboard({
             const attList = bundle.attendances || [];
             const logList = Array.isArray(bundle.attendanceLogs) ? bundle.attendanceLogs : [];
             const disbList = Array.isArray(bundle.disbursements) ? bundle.disbursements : [];
+            const reimbList = Array.isArray(bundle.reimbursements) ? bundle.reimbursements : [];
             setTeachers(teacherList);
             setPayrolls(payrollList);
             setAttendances(attList);
             setAttendanceLogs(logList);
             setDisbursementRequests(disbList);
+            setReimbursementRequests(reimbList);
             setAttEdits((prev) => buildAttEditsMap(teacherList, attList, logList, prev, false));
             seedServerVersions(bundle.versions);
             if (bundle.schoolProfile) {
@@ -242,12 +254,13 @@ export function AdminDashboard({
       }
 
       if (!loadedViaBootstrap) {
-        const [teacherList, payrollList, attList, logList, disbList] = await Promise.all([
+        const [teacherList, payrollList, attList, logList, disbList, reimbList] = await Promise.all([
           api.get('teachers.list'),
           api.get('payrolls.list'),
           api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
           api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }).catch(() => []),
           api.get('disbursements.list').catch(() => []),
+          api.get('reimbursements.list').catch(() => []),
         ]);
         const validLogs = Array.isArray(logList) ? logList : [];
         setTeachers(teacherList || []);
@@ -255,6 +268,7 @@ export function AdminDashboard({
         setAttendances(attList || []);
         setAttendanceLogs(validLogs);
         setDisbursementRequests(Array.isArray(disbList) ? disbList : []);
+        setReimbursementRequests(Array.isArray(reimbList) ? reimbList : []);
         setAttEdits((prev) => buildAttEditsMap(teacherList, attList, validLogs, prev, false));
         fetchSchoolProfileFromServer();
       }
@@ -331,6 +345,16 @@ export function AdminDashboard({
               })
           );
         }
+        if (domainSet.has('reimbursements')) {
+          tasks.push(
+            api
+              .get('reimbursements.list')
+              .catch(() => [])
+              .then((res) => {
+                setReimbursementRequests(Array.isArray(res) ? res : []);
+              })
+          );
+        }
 
         if (tasks.length === 0) return;
         await Promise.all(tasks);
@@ -369,12 +393,15 @@ export function AdminDashboard({
     return subscribeDataChange((domains, meta) => {
       if (meta?.source === 'admin_local') return;
       const relevant = domains.filter((d) =>
-        ['teachers', 'attendances', 'payrolls', 'disbursements'].includes(d)
+        ['teachers', 'attendances', 'payrolls', 'disbursements', 'reimbursements'].includes(d)
       );
       if (relevant.length === 0) return;
       const nextSet = new Set(relevant);
       if (
-        (nextSet.has('teachers') || nextSet.has('attendances') || nextSet.has('disbursements')) &&
+        (nextSet.has('teachers') ||
+          nextSet.has('attendances') ||
+          nextSet.has('disbursements') ||
+          nextSet.has('reimbursements')) &&
         payrolls.some((p) => p.status === 'draft')
       ) {
         nextSet.add('payrolls');
@@ -387,6 +414,10 @@ export function AdminDashboard({
     () => disbursementRequests.filter((r) => r.status === 'pending_treasurer').length,
     [disbursementRequests]
   );
+  const pendingReimbursementsCount = useMemo(
+    () => reimbursementRequests.filter((r) => r.status === 'pending_treasurer').length,
+    [reimbursementRequests]
+  );
   const outOfSyncDraftsCount = useMemo(
     () => payrolls.filter((p) => p.status === 'draft' && p.needs_resync).length,
     [payrolls]
@@ -397,8 +428,15 @@ export function AdminDashboard({
       payroll: outOfSyncDraftsCount > 0 ? outOfSyncDraftsCount : undefined,
       teachers: teachers.length,
       disbursements: pendingDisbursementsCount > 0 ? pendingDisbursementsCount : undefined,
+      reimbursements: pendingReimbursementsCount > 0 ? pendingReimbursementsCount : undefined,
     });
-  }, [teachers.length, pendingDisbursementsCount, outOfSyncDraftsCount, onBadgesChange]);
+  }, [
+    teachers.length,
+    pendingDisbursementsCount,
+    pendingReimbursementsCount,
+    outOfSyncDraftsCount,
+    onBadgesChange,
+  ]);
 
   const openEditTeacherModal = useCallback(async (teacher) => {
     const { isInfaqZakatEnabled, parseCustomComponents, resolveStaffCategory } = await import(
@@ -864,6 +902,10 @@ export function AdminDashboard({
     refreshDomains(['disbursements'], { silent: false });
   }, [refreshDomains]);
 
+  const handleRefreshReimbursements = useCallback(() => {
+    refreshDomains(['reimbursements'], { silent: false });
+  }, [refreshDomains]);
+
   const handleMaintenanceComplete = useCallback(() => {
     refreshDomains(['attendances', 'payrolls'], { silent: false });
   }, [refreshDomains]);
@@ -931,6 +973,41 @@ export function AdminDashboard({
           >
             <Banknote className="h-3.5 w-3.5" />
             <span>Tinjau Pengajuan ({pendingDisbursementsCount})</span>
+          </button>
+        </div>
+      )}
+
+      {/* Notifikasi Catatan Belanja Sekolah Baru dari PTK */}
+      {pendingReimbursementsCount > 0 && activeTab !== 'reimbursements' && (
+        <div
+          className="nim-glass rounded-2xl p-3.5 sm:p-4 flex flex-wrap items-center justify-between gap-3"
+          style={{
+            background: 'var(--accent-soft)',
+            boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+          }}
+        >
+          <div className="flex items-center gap-2.5">
+            <span className="nim-kpi__ico !w-8 !h-8">
+              <Receipt className="h-4 w-4" />
+            </span>
+            <div>
+              <p className="text-xs sm:text-sm font-bold text-[var(--ink)]">
+                Ada {pendingReimbursementsCount} Catatan Belanja Sekolah PTK Menunggu Verifikasi
+                Bendahara
+              </p>
+              <p className="text-[11px] text-[var(--ink-2)]">
+                Periksa nota/nominal dan tentukan periode slip gaji sebelum diteruskan ke Kepala
+                Sekolah.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('reimbursements')}
+            className="nim-btn nim-btn--primary nim-btn--sm"
+          >
+            <Receipt className="h-3.5 w-3.5" />
+            <span>Verifikasi Belanja ({pendingReimbursementsCount})</span>
           </button>
         </div>
       )}
@@ -1014,6 +1091,12 @@ export function AdminDashboard({
                 label: 'Pencairan PTK',
                 icon: Banknote,
                 badge: pendingDisbursementsCount,
+              },
+              {
+                id: 'reimbursements',
+                label: 'Belanja Sekolah',
+                icon: Receipt,
+                badge: pendingReimbursementsCount,
               },
               { id: 'teachers', label: 'Master PTK & Gaji', icon: Users },
               { id: 'school_profile', label: 'Profil & Arsip', icon: Building2 },
@@ -1213,6 +1296,14 @@ export function AdminDashboard({
               />
             )}
 
+            {activeTab === 'reimbursements' && (
+              <ReimbursementApprovalPanel
+                role="admin"
+                items={reimbursementRequests}
+                onRefresh={handleRefreshReimbursements}
+              />
+            )}
+
             {activeTab === 'school_profile' && (
               <div className="space-y-6">
                 <SchoolProfileSection />
@@ -1287,6 +1378,12 @@ export function AdminDashboard({
             label: 'Pencairan',
             icon: Banknote,
             badge: pendingDisbursementsCount > 0 ? pendingDisbursementsCount : undefined,
+          },
+          {
+            id: 'reimbursements',
+            label: 'Belanja',
+            icon: Receipt,
+            badge: pendingReimbursementsCount > 0 ? pendingReimbursementsCount : undefined,
           },
           { id: 'teachers', label: 'Master PTK', icon: Users, badge: teachers.length },
           { id: 'school_profile', label: 'Profil', icon: Building2 },

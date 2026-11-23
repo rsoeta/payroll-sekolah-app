@@ -274,6 +274,8 @@ export function AppShell({
       } else {
         onTabChange?.('disbursements');
       }
+    } else if (String(notifItem.type || '').startsWith('reimbursement_')) {
+      onTabChange?.('reimbursements');
     }
   };
 
