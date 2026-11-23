@@ -906,10 +906,10 @@ function handleGetSchoolProfile() {
 
 function handleUpdateSchoolProfile(payload) {
   var existing = getSchoolProfileDataGas() || {};
+  var incomingClientId =
+    payload.google_client_id !== undefined ? sanitizeString(payload.google_client_id || '') : '';
   var nextGoogleClientId =
-    payload.google_client_id !== undefined
-      ? sanitizeString(payload.google_client_id || '')
-      : sanitizeString(existing.google_client_id || GOOGLE_OAUTH_CLIENT_ID || '');
+    incomingClientId || sanitizeString(existing.google_client_id || GOOGLE_OAUTH_CLIENT_ID || '');
   var profileObj = {
     app_short_name: sanitizeString(payload.app_short_name || 'SIPAYROLL'),
     foundation_name: sanitizeString(payload.foundation_name || ''),

@@ -34,7 +34,7 @@ export function isValidGoogleClientId(clientId) {
 
 export function resolveGoogleClientId(schoolProfile) {
   const fromProfile = String(schoolProfile?.google_client_id || '').trim();
-  if (fromProfile) return fromProfile;
+  if (fromProfile && !fromProfile.startsWith('GANTI_DENGAN_')) return fromProfile;
 
   const fromEnv = String(import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
   if (fromEnv && !fromEnv.startsWith('GANTI_DENGAN_')) return fromEnv;

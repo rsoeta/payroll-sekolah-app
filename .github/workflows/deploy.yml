@@ -34,6 +34,7 @@ jobs:
       - name: Build Aplikasi Produksi (Vite + PWA)
         env:
           VITE_GAS_API_URL: ${{ secrets.VITE_GAS_API_URL }}
+          VITE_GOOGLE_CLIENT_ID: ${{ secrets.VITE_GOOGLE_CLIENT_ID }}
         run: npm run build
 
       - name: Publish Hasil Build (dist/) ke Branch production

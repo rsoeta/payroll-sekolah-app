@@ -17,16 +17,25 @@ import {
   resetSchoolProfileToDefault,
   processLogoImageFile,
 } from '../services/schoolProfileService';
+import { resolveGoogleClientId } from '../utils/googleOAuth';
 import { downloadPayslipPdf } from '../utils/pdfSlipLoader';
 import notify from '../utils/notify';
 
+function loadProfileWithResolvedClientId() {
+  const prof = getSchoolProfile();
+  return {
+    ...prof,
+    google_client_id: resolveGoogleClientId(prof) || prof.google_client_id || '',
+  };
+}
+
 export function SchoolProfileSection() {
-  const [form, setForm] = useState(() => getSchoolProfile());
+  const [form, setForm] = useState(loadProfileWithResolvedClientId);
   const [saving, setSaving] = useState(false);
   const fileInputRef = useRef(null);
 
   useEffect(() => {
-    setForm(getSchoolProfile());
+    setForm(loadProfileWithResolvedClientId());
   }, []);
 
   const handleFieldChange = (field, value) => {

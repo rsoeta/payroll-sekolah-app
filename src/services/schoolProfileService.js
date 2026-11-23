@@ -78,8 +78,12 @@ export function subscribeSchoolProfile(callback) {
   };
 }
 
-export function saveLocalSchoolProfile(partialProfile) {
+export function saveLocalSchoolProfile(partialProfile, options = {}) {
   const current = getSchoolProfile();
+  const incomingClientId = sanitizeClientString(partialProfile.google_client_id ?? '');
+  const nextClientId = options.preserveClientIdIfEmpty
+    ? incomingClientId || sanitizeClientString(current.google_client_id)
+    : sanitizeClientString(partialProfile.google_client_id ?? current.google_client_id);
   const merged = {
     ...current,
     app_short_name:
@@ -105,9 +109,7 @@ export function saveLocalSchoolProfile(partialProfile) {
       partialProfile.logo_data_url !== undefined
         ? String(partialProfile.logo_data_url || '/logo.png').trim()
         : current.logo_data_url,
-    google_client_id: sanitizeClientString(
-      partialProfile.google_client_id ?? current.google_client_id
-    ),
+    google_client_id: nextClientId,
   };
 
   localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(merged));
@@ -123,7 +125,7 @@ export async function fetchSchoolProfileFromServer() {
       typeof remote === 'object' &&
       (remote.school_name || remote.foundation_name || remote.google_client_id)
     ) {
-      return saveLocalSchoolProfile(remote);
+      return saveLocalSchoolProfile(remote, { preserveClientIdIfEmpty: true });
     }
   } catch {
     // Graceful fallback if GAS backend is on an older version without schoolProfile.get
