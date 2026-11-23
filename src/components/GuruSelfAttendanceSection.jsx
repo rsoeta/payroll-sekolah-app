@@ -23,6 +23,7 @@ import {
   DEFAULT_TEACHING_CLASSES,
   computeAttendanceBreakdownFromLogs,
   computeClassBreakdownFromLogs,
+  computeEffectiveJtmHours,
   formatAttendanceNumber,
   formatDateIndo,
   getAttendanceConditionMeta,
@@ -297,10 +298,8 @@ export function GuruSelfAttendanceSection({
       let nextJtm = cur.jtm_hours;
       if (!meta.allowsJtm) {
         nextJtm = 0;
-      } else if (meta.id === 'tugas') {
-        nextJtm = 0;
       } else if (Number(cur.jtm_hours) === 0) {
-        nextJtm = 2;
+        nextJtm = meta.defaultJtm || 2;
       }
       return {
         ...prev,
@@ -354,11 +353,9 @@ export function GuruSelfAttendanceSection({
           status: meta.id,
           jtm_hours: !meta.allowsJtm
             ? 0
-            : meta.id === 'tugas'
-            ? 0
             : Number(cur.jtm_hours) > 0
             ? cur.jtm_hours
-            : 2,
+            : meta.defaultJtm || 2,
         };
       }
       return next;
@@ -497,8 +494,8 @@ export function GuruSelfAttendanceSection({
             </span>
           </div>
           <p className="mt-1 text-xs text-[var(--muted)]">
-            Centang kelas yang diampu pada tanggal tersebut, pilih kondisi (Hadir = 1, Tugas =
-            0,5, Sakit/Izin = tidak hadir), lalu simpan.
+            Centang kelas yang diampu pada tanggal tersebut, pilih kondisi (Hadir = 1 &amp; 100%
+            JTM, Tugas = 0,5 &amp; 50% JTM, Sakit/Izin = 0), lalu simpan.
           </p>
         </div>
 
@@ -731,6 +728,10 @@ export function GuruSelfAttendanceSection({
             {classList.map((clsName) => {
               const rowState = classRowsState[clsName] || createDefaultClassRowState(null);
               const condMeta = getAttendanceConditionMeta(rowState.status);
+              const rawRowJtm = condMeta.allowsJtm
+                ? Math.max(0, Number(rowState.jtm_hours || 0))
+                : 0;
+              const effRowJtm = computeEffectiveJtmHours(rowState.status, rawRowJtm);
               const isHighlightedEdit =
                 editingHighlightClass &&
                 editingHighlightClass.toLowerCase() === clsName.toLowerCase();
@@ -764,7 +765,12 @@ export function GuruSelfAttendanceSection({
                       {rowState.checked ? (
                         <span className={`${TONE_BADGE_CLASS[condMeta.tone]} !text-[10.5px]`}>
                           {condMeta.label} • +{formatAttendanceNumber(condMeta.presentWeight)} •{' '}
-                          {formatAttendanceNumber(condMeta.allowsJtm ? rowState.jtm_hours : 0)} JTM
+                          {condMeta.id === 'tugas' && rawRowJtm > 0
+                            ? `${formatAttendanceNumber(rawRowJtm)}×50% = ${formatAttendanceNumber(
+                                effRowJtm
+                              )}`
+                            : formatAttendanceNumber(effRowJtm)}{' '}
+                          JTM
                         </span>
                       ) : (
                         <span className="text-[11px] text-[var(--muted)]">Tidak dipilih</span>
@@ -830,7 +836,14 @@ export function GuruSelfAttendanceSection({
                             }
                             className="nim-input !w-20 !py-1 text-xs font-bold tabular-nums disabled:opacity-60"
                           />
-                          <span className="text-[11px] text-[var(--muted)]">jam</span>
+                          <span className="text-[11px] text-[var(--muted)]">
+                            jam
+                            {condMeta.id === 'tugas' && (
+                              <strong className="ml-1 text-[var(--warn-text)] tabular-nums">
+                                → {formatAttendanceNumber(effRowJtm)} JTM efektif (50%)
+                              </strong>
+                            )}
+                          </span>
                         </div>
 
                         <input
@@ -993,6 +1006,8 @@ export function GuruSelfAttendanceSection({
                   const isInvalid = vStatus === 'invalid';
                   const isActiveDate =
                     normalizeIsoDateOnly(log.date) === normalizeIsoDateOnly(dateInput);
+                  const rawLogJtm = cond.allowsJtm ? Math.max(0, Number(log.jtm_hours || 0)) : 0;
+                  const effLogJtm = computeEffectiveJtmHours(log.status, rawLogJtm);
                   return (
                     <div
                       key={log.id}
@@ -1033,7 +1048,11 @@ export function GuruSelfAttendanceSection({
                             <strong className="text-[var(--ink)]">{cond.absentWeight}</strong> •
                             JTM:{' '}
                             <strong className="text-[var(--accent-text)]">
-                              {formatAttendanceNumber(cond.allowsJtm ? log.jtm_hours : 0)} jam
+                              {cond.id === 'tugas' && rawLogJtm > 0
+                                ? `${formatAttendanceNumber(rawLogJtm)} × 50% = ${formatAttendanceNumber(
+                                    effLogJtm
+                                  )} jam`
+                                : `${formatAttendanceNumber(effLogJtm)} jam`}
                             </strong>
                           </p>
                           {isInvalid && (

@@ -775,12 +775,41 @@ export function KepsekDashboard({
                         </>
                       );
                     })()}
+                    {Number(d.approved_disbursement_total || 0) > 0 && (
+                      <>
+                        <span>
+                          Pencairan Disetujui Kepsek
+                          {Number(d.approved_disbursement_count || 0) > 1
+                            ? ` (${d.approved_disbursement_count}×)`
+                            : ''}
+                          :
+                        </span>
+                        <span
+                          className="text-right font-semibold tabular-nums"
+                          style={{ color: 'var(--warn-text)' }}
+                        >
+                          - {formatRupiah(d.approved_disbursement_total)}
+                        </span>
+                      </>
+                    )}
                   </div>
                   <div
                     className="flex items-center justify-between pt-2"
                     style={{ borderTop: '1px solid var(--line)' }}
                   >
-                    <span className="text-xs font-bold text-[var(--ink-2)]">Take Home Pay:</span>
+                    <div>
+                      <span className="text-xs font-bold text-[var(--ink-2)] block">
+                        {Number(d.approved_disbursement_total || 0) > 0
+                          ? 'Sisa Take Home Pay:'
+                          : 'Take Home Pay:'}
+                      </span>
+                      {Number(d.approved_disbursement_total || 0) > 0 &&
+                        Number(d.net_salary_before_disbursement || 0) > 0 && (
+                          <span className="text-[10.5px] text-[var(--muted)] tabular-nums">
+                            Sebelum pencairan: {formatRupiah(d.net_salary_before_disbursement)}
+                          </span>
+                        )}
+                    </div>
                     <span className="text-base font-bold text-[var(--accent-text)] tabular-nums">
                       {formatRupiah(row.net_salary)}
                     </span>

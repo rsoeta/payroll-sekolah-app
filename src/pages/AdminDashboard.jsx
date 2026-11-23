@@ -374,7 +374,7 @@ export function AdminDashboard({
       if (relevant.length === 0) return;
       const nextSet = new Set(relevant);
       if (
-        (nextSet.has('teachers') || nextSet.has('attendances')) &&
+        (nextSet.has('teachers') || nextSet.has('attendances') || nextSet.has('disbursements')) &&
         payrolls.some((p) => p.status === 'draft')
       ) {
         nextSet.add('payrolls');

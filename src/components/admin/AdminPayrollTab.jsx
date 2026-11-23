@@ -158,7 +158,14 @@ const DetailGroupCard = React.memo(function DetailGroupCard({
                   </div>
                   <button
                     type="button"
-                    onClick={() => downloadPayslipPdf(detail)}
+                    onClick={() =>
+                      downloadPayslipPdf({
+                        ...detail,
+                        month: selectedPayroll.month,
+                        year: selectedPayroll.year,
+                        payroll_status: selectedPayroll.status,
+                      })
+                    }
                     className="nim-btn nim-btn--sm shrink-0"
                     style={{
                       background: 'var(--accent-soft)',
@@ -224,15 +231,42 @@ const DetailGroupCard = React.memo(function DetailGroupCard({
                       </>
                     );
                   })()}
+                  {Number(parsed.approved_disbursement_total || 0) > 0 && (
+                    <>
+                      <span>
+                        Pencairan Disetujui Kepsek
+                        {Number(parsed.approved_disbursement_count || 0) > 1
+                          ? ` (${parsed.approved_disbursement_count}×)`
+                          : ''}
+                        :
+                      </span>
+                      <span
+                        className="text-right font-semibold tabular-nums"
+                        style={{ color: 'var(--warn-text)' }}
+                      >
+                        - {formatRupiah(parsed.approved_disbursement_total)}
+                      </span>
+                    </>
+                  )}
                 </div>
 
                 <div
                   className="flex items-center justify-between pt-2"
                   style={{ borderTop: '1px solid var(--line)' }}
                 >
-                  <span className="text-xs font-bold uppercase text-[var(--ink-2)]">
-                    Gaji Bersih (Net):
-                  </span>
+                  <div>
+                    <span className="text-xs font-bold uppercase text-[var(--ink-2)] block">
+                      {Number(parsed.approved_disbursement_total || 0) > 0
+                        ? 'Sisa Gaji Bersih (Net):'
+                        : 'Gaji Bersih (Net):'}
+                    </span>
+                    {Number(parsed.approved_disbursement_total || 0) > 0 &&
+                      Number(parsed.net_salary_before_disbursement || 0) > 0 && (
+                        <span className="text-[10.5px] text-[var(--muted)] tabular-nums">
+                          Sebelum pencairan: {formatRupiah(parsed.net_salary_before_disbursement)}
+                        </span>
+                      )}
+                  </div>
                   <span className="text-base font-bold text-[var(--accent-text)] tabular-nums">
                     {formatRupiah(detail.net_salary)}
                   </span>
@@ -379,13 +413,14 @@ export const AdminPayrollTab = React.memo(function AdminPayrollTab({
                   boxShadow: 'inset 0 0 0 1px var(--line-2)',
                 }}
               >
-                Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan + Tunj (+) − Infaq / Zakat Profesi
-                2,5% (opsional)
+                Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan + Tunj (+) − Pot (−) − Infaq / Zakat
+                2,5% − Pencairan Disetujui Kepsek
               </code>
               <span className="mt-1 block text-[11px] text-[var(--muted)]">
                 Infaq / Zakat Profesi = 2,5% × [Gaji Pokok + (JTM × Tarif) + Tunjangan Jabatan +
-                Tunjangan Custom (Tunj +)], otomatis dipotong saat kalkulasi bagi PTK yang
-                mengaktifkan opsi.
+                Tunjangan Custom (Tunj +)]. Pengajuan pencairan PTK yang telah disetujui Kepala
+                Sekolah pada periode terkait otomatis memotong sisa gaji bersih &amp; total
+                anggaran draf.
               </span>
             </p>
           </div>

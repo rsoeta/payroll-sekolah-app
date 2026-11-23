@@ -142,18 +142,32 @@ function drawCompactPayslipSlot(
   const infaqZakatDeduction = resolveInfaqZakatAmount(details);
   const customSummary = summarizeCustomComponents(details.custom_components);
 
+  const isDisbursementSlip =
+    slipRecord.slip_type === 'disbursement' || details.slip_type === 'disbursement';
+
   const grossSalary = Number(
     details.gross_salary ??
       baseSalary + jtmHonor + positionAllowance + customSummary.totalCustomAllowance
   );
-  const totalDeductions = infaqZakatDeduction + customSummary.totalCustomDeduction;
-  const estimatedNetSalary = Math.max(
-    0,
-    Number(details.estimated_net_salary ?? details.net_salary ?? grossSalary - totalDeductions)
-  );
+  const regularDeductions = infaqZakatDeduction + customSummary.totalCustomDeduction;
+  const approvedDisbursementTotal = !isDisbursementSlip
+    ? Math.max(0, Number(details.approved_disbursement_total || 0))
+    : 0;
+  const approvedDisbursementCount = !isDisbursementSlip
+    ? Number(details.approved_disbursement_count || 0)
+    : 0;
+  const totalDeductions = regularDeductions + approvedDisbursementTotal;
+  const estimatedNetSalary = isDisbursementSlip
+    ? Math.max(
+        0,
+        Number(
+          details.estimated_net_salary ??
+            details.net_salary_before_disbursement ??
+            grossSalary - regularDeductions
+        )
+      )
+    : Math.max(0, Number(details.net_salary ?? grossSalary - totalDeductions));
 
-  const isDisbursementSlip =
-    slipRecord.slip_type === 'disbursement' || details.slip_type === 'disbursement';
   const disbursementScopeLabel =
     (details.request_scope || slipRecord.request_scope) === 'partial'
       ? 'SEBAGIAN'
@@ -171,7 +185,7 @@ function drawCompactPayslipSlot(
   );
   const finalTakeHomePay = isDisbursementSlip
     ? approvedDisbursementAmount
-    : Number(slipRecord.net_salary ?? estimatedNetSalary);
+    : Math.max(0, Number(slipRecord.net_salary ?? estimatedNetSalary));
 
   const frameX = 10;
   const frameW = 190;
@@ -198,6 +212,17 @@ function drawCompactPayslipSlot(
       label: item.label,
       amount: item.amount,
     })),
+    ...(approvedDisbursementTotal > 0
+      ? [
+          {
+            label:
+              approvedDisbursementCount > 1
+                ? `Pencairan (${approvedDisbursementCount}x)`
+                : 'Pencairan Disetujui',
+            amount: approvedDisbursementTotal,
+          },
+        ]
+      : []),
   ];
 
   const maxDataRows = Math.max(earningsRows.length, deductionRows.length);
@@ -392,12 +417,11 @@ function drawCompactPayslipSlot(
           : `Dicairkan Disetujui = ${formatRupiah(approvedDisbursementAmount)}`;
       doc.text(disbText, centerX, y + 8.0, { align: 'center' });
     } else {
-      doc.text(
-        `Penerimaan Bersih (A-B) = ${formatRupiah(finalTakeHomePay)}`,
-        centerX,
-        y + 4.2,
-        { align: 'center' }
-      );
+      const netPrefix =
+        approvedDisbursementTotal > 0 ? 'Sisa Penerimaan (A-B)' : 'Penerimaan Bersih (A-B)';
+      doc.text(`${netPrefix} = ${formatRupiah(finalTakeHomePay)}`, centerX, y + 4.2, {
+        align: 'center',
+      });
     }
 
     // Terbilang Row (Italic, Centered)

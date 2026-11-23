@@ -650,7 +650,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     return {
       ok: true,
       status: 200,
-      version: 'v19_GoogleOAuthWhitelist (Sandbox)',
+      version: 'v21_DisbursementDraftDeduction (Sandbox)',
       data: {
         token: encodedToken,
         expiresAt: sessionPayload.exp * 1000,
@@ -711,6 +711,101 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       : null;
   };
 
+  const doesDisbursementMatchPeriod = (disbMonth, disbYear, targetMonthKey, targetYear) => {
+    if (Number(disbYear) !== Number(targetYear)) return false;
+    const dKey = normalizePeriodKey(disbMonth);
+    const tKey = normalizePeriodKey(targetMonthKey);
+    if (!dKey || !tKey) return false;
+    if (dKey === tKey) return true;
+    const parsedTarget = parsePeriodMonthKey(tKey);
+    if (!parsedTarget.isRange) return false;
+    const parsedDisb = parsePeriodMonthKey(dKey);
+    return parsedDisb.monthsInRange.every((m) => parsedTarget.monthsInRange.includes(m));
+  };
+
+  const getApprovedDisbursementSummaryForPeriod = (
+    allDisbursements,
+    teacherId,
+    targetMonthKey,
+    targetYear
+  ) => {
+    let total = 0;
+    let count = 0;
+    (allDisbursements || []).forEach((r) => {
+      if (
+        String(r.teacher_id) === String(teacherId) &&
+        String(r.status) === 'approved' &&
+        doesDisbursementMatchPeriod(r.month, r.year, targetMonthKey, targetYear)
+      ) {
+        total += Math.max(0, Number(r.approved_amount ?? r.requested_amount ?? 0));
+        count += 1;
+      }
+    });
+    return { total: Math.round(total), count };
+  };
+
+  const applyLiveDisbursementToDraftDetail = (detailRow, parentPayroll, allDisbursements) => {
+    let detailsObj = {};
+    try {
+      detailsObj = JSON.parse(detailRow.details_json || '{}');
+    } catch {
+      detailsObj = {};
+    }
+    if (!parentPayroll || String(parentPayroll.status) !== 'draft') {
+      return {
+        net_salary: Number(detailRow.net_salary || 0),
+        details_json: detailRow.details_json || '{}',
+        detailsObj,
+        adjusted: false,
+      };
+    }
+
+    const storedNet = Number(detailRow.net_salary || 0);
+    const fullNetBefore =
+      detailsObj.net_salary_before_disbursement !== undefined &&
+      detailsObj.net_salary_before_disbursement !== ''
+        ? Math.max(0, Number(detailsObj.net_salary_before_disbursement))
+        : Math.max(0, storedNet + Number(detailsObj.approved_disbursement_total || 0));
+
+    const approvedSummary = getApprovedDisbursementSummaryForPeriod(
+      allDisbursements,
+      detailRow.teacher_id,
+      parentPayroll.month,
+      parentPayroll.year
+    );
+
+    const liveNet = Math.max(0, fullNetBefore - approvedSummary.total);
+    const prevApproved = Number(detailsObj.approved_disbursement_total || 0);
+    const prevCount = Number(detailsObj.approved_disbursement_count || 0);
+    if (
+      liveNet === storedNet &&
+      approvedSummary.total === prevApproved &&
+      approvedSummary.count === prevCount &&
+      detailsObj.net_salary_before_disbursement !== undefined
+    ) {
+      return {
+        net_salary: storedNet,
+        details_json: detailRow.details_json || '{}',
+        detailsObj,
+        adjusted: false,
+      };
+    }
+
+    const updatedDetailsObj = {
+      ...detailsObj,
+      net_salary_before_disbursement: fullNetBefore,
+      approved_disbursement_total: approvedSummary.total,
+      approved_disbursement_count: approvedSummary.count,
+      net_salary: liveNet,
+    };
+    return {
+      net_salary: liveNet,
+      details_json: JSON.stringify(updatedDetailsObj),
+      detailsObj: updatedDetailsObj,
+      adjusted: approvedSummary.total !== prevApproved || liveNet !== storedNet,
+    };
+  };
+
   const ensureSyncMeta = () => {
     if (!db._meta || typeof db._meta !== 'object') db._meta = {};
     const v = db._meta.versions && typeof db._meta.versions === 'object' ? db._meta.versions : {};
@@ -727,6 +822,12 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       typeof db._meta.attendance_period_versions !== 'object'
     ) {
       db._meta.attendance_period_versions = {};
+    }
+    if (
+      !db._meta.disbursement_period_versions ||
+      typeof db._meta.disbursement_period_versions !== 'object'
+    ) {
+      db._meta.disbursement_period_versions = {};
     }
     if (!db._meta.draft_snapshots || typeof db._meta.draft_snapshots !== 'object') {
       db._meta.draft_snapshots = {};
@@ -748,7 +849,21 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     );
   };
 
-  const bumpVersions = (domains, periodList = []) => {
+  const getEffectivePeriodDisbVersion = (monthVal, yearVal) => {
+    const meta = ensureSyncMeta();
+    const parsed = parsePeriodMonthKey(monthVal);
+    const yr = Number(yearVal);
+    if (!yr) return 0;
+    const keys = Array.from(
+      new Set([`${yr}:${parsed.key}`, ...parsed.monthsInRange.map((m) => `${yr}:${m}`)])
+    );
+    return keys.reduce(
+      (sum, k) => sum + Number(meta.disbursement_period_versions[k] || 0),
+      0
+    );
+  };
+
+  const bumpVersions = (domains, periodList = [], disbursementPeriodList = []) => {
     const meta = ensureSyncMeta();
     (Array.isArray(domains) ? domains : [domains]).forEach((d) => {
       if (d && meta.versions[d] !== undefined) {
@@ -766,6 +881,17 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           Number(meta.attendance_period_versions[pKey] || 0) + 1;
       });
     }
+    if (Array.isArray(disbursementPeriodList)) {
+      disbursementPeriodList.forEach((p) => {
+        if (!p) return;
+        const pk = normalizePeriodKey(p.month);
+        const yr = Number(p.year);
+        if (!pk || !yr) return;
+        const pKey = `${yr}:${pk}`;
+        meta.disbursement_period_versions[pKey] =
+          Number(meta.disbursement_period_versions[pKey] || 0) + 1;
+      });
+    }
     return { ...meta.versions };
   };
 
@@ -776,6 +902,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       generated_at: new Date().toISOString(),
       teachers_ver: Number(meta.versions.teachers || 1),
       attendance_ver: getEffectivePeriodAttVersion(monthVal, yearVal),
+      disbursement_ver: getEffectivePeriodDisbVersion(monthVal, yearVal),
       period_key: `${Number(yearVal)}:${normalizePeriodKey(monthVal)}`,
     };
   };
@@ -799,12 +926,25 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         generated_at: '',
       };
       const curAttVer = getEffectivePeriodAttVersion(p.month, p.year);
+      const curDisbVer = getEffectivePeriodDisbVersion(p.month, p.year);
       const reasons = [];
       if (curTeachersVer > Number(snap.teachers_ver || 1)) {
         reasons.push('Perubahan Master PTK / Komponen Gaji');
       }
       if (curAttVer > Number(snap.attendance_ver || 0)) {
         reasons.push('Perubahan Kehadiran & JTM');
+      }
+      if (curDisbVer > Number(snap.disbursement_ver || 0)) {
+        reasons.push('Pencairan PTK Disetujui Kepsek');
+      } else if (snap.disbursement_ver === undefined) {
+        const hasApprovedDisb = (db.Disbursement_Requests || []).some(
+          (r) =>
+            r.status === 'approved' &&
+            doesDisbursementMatchPeriod(r.month, r.year, p.month, p.year)
+        );
+        if (hasApprovedDisb) {
+          reasons.push('Pencairan PTK Disetujui Kepsek (belum terhitung di draf)');
+        }
       }
       return {
         ...p,
@@ -923,6 +1063,17 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           (d) => d.teacher_id === own.id && approvedPayrollIds.has(d.payroll_id)
         );
         const allMySlips = db.Payroll_Details.filter((d) => d.teacher_id === own.id);
+        const latestSlip = allMySlips.length ? allMySlips[allMySlips.length - 1] : null;
+        const latestParent = latestSlip
+          ? db.Payrolls.find((p) => p.id === latestSlip.payroll_id)
+          : null;
+        const latestEstimatedNetSalary = latestSlip
+          ? applyLiveDisbursementToDraftDetail(
+              latestSlip,
+              latestParent,
+              db.Disbursement_Requests || []
+            ).net_salary
+          : 0;
         return {
           ok: true,
           status: 200,
@@ -933,9 +1084,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             latestNetSalary: myApprovedSlips.length
               ? myApprovedSlips[myApprovedSlips.length - 1].net_salary
               : 0,
-            latestEstimatedNetSalary: allMySlips.length
-              ? allMySlips[allMySlips.length - 1].net_salary
-              : 0,
+            latestEstimatedNetSalary,
           },
         };
       }
@@ -1956,7 +2105,17 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           jtmHonor +
           Number(comp.position_allowance) +
           customAllowanceTotal;
-        const net = Math.max(0, gross - infaqZakatAmount - customDeductionTotal);
+        const netBeforeDisbursement = Math.max(
+          0,
+          gross - infaqZakatAmount - customDeductionTotal
+        );
+        const approvedDisb = getApprovedDisbursementSummaryForPeriod(
+          db.Disbursement_Requests || [],
+          teacher.id,
+          targetKey,
+          year
+        );
+        const net = Math.max(0, netBeforeDisbursement - approvedDisb.total);
         totalBudget += net;
 
         return {
@@ -1986,6 +2145,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             custom_allowance_total: customAllowanceTotal,
             custom_deduction_total: customDeductionTotal,
             gross_salary: gross,
+            net_salary_before_disbursement: netBeforeDisbursement,
+            approved_disbursement_total: approvedDisb.total,
+            approved_disbursement_count: approvedDisb.count,
             net_salary: net,
           }),
         };
@@ -2070,8 +2232,15 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           .map((d) => {
             const parent = db.Payrolls.find((p) => p.id === d.payroll_id);
             if (!parent) return null;
+            const liveApplied = applyLiveDisbursementToDraftDetail(
+              d,
+              parent,
+              db.Disbursement_Requests || []
+            );
             return {
               ...d,
+              net_salary: liveApplied.net_salary,
+              details_json: liveApplied.details_json,
               slip_type: 'payroll',
               month: parent.month,
               year: parent.year,
@@ -2149,12 +2318,30 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         let payrollStatus = matchingPayroll ? matchingPayroll.status : 'estimate_live';
 
         if (matchingDetail) {
-          estimatedNet = Number(matchingDetail.net_salary || 0);
+          let rawDetails = {};
           try {
-            detailsObj = JSON.parse(matchingDetail.details_json || '{}');
+            rawDetails = JSON.parse(matchingDetail.details_json || '{}');
           } catch {
-            detailsObj = {};
+            rawDetails = {};
           }
+          const fullEstimatedNet =
+            rawDetails.net_salary_before_disbursement !== undefined &&
+            rawDetails.net_salary_before_disbursement !== ''
+              ? Math.max(0, Number(rawDetails.net_salary_before_disbursement))
+              : Math.max(
+                  0,
+                  Number(matchingDetail.net_salary || 0) +
+                    Number(rawDetails.approved_disbursement_total || 0)
+                );
+          estimatedNet = fullEstimatedNet;
+          detailsObj = {
+            ...rawDetails,
+            net_salary_before_disbursement: fullEstimatedNet,
+            estimated_net_salary: fullEstimatedNet,
+            net_salary: fullEstimatedNet,
+          };
+          delete detailsObj.approved_disbursement_total;
+          delete detailsObj.approved_disbursement_count;
         } else {
           const comp = db.Salary_Components.find((c) => c.teacher_id === own.id) || {
             base_salary: 0,
@@ -2246,6 +2433,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             custom_allowance_total: customAllowance,
             custom_deduction_total: customDeduction,
             gross_salary: gross,
+            net_salary_before_disbursement: estimatedNet,
+            estimated_net_salary: estimatedNet,
             net_salary: estimatedNet,
           };
         }
@@ -2253,23 +2442,27 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         const periodReqs = (db.Disbursement_Requests || []).filter(
           (r) =>
             r.teacher_id === own.id &&
-            normalizePeriodKey(r.month) === targetKey &&
-            Number(r.year) === yr &&
-            r.status !== 'rejected'
+            r.status !== 'rejected' &&
+            doesDisbursementMatchPeriod(r.month, r.year, targetKey, yr)
         );
-        const alreadyRequested = periodReqs.reduce(
-          (s, r) =>
-            s +
-            Number(
-              r.status === 'approved' || r.status === 'approved_treasurer'
-                ? r.approved_amount ?? r.requested_amount ?? 0
-                : r.requested_amount ?? 0
-            ),
-          0
-        );
-        const alreadyApproved = periodReqs
-          .filter((r) => r.status === 'approved')
-          .reduce((s, r) => s + Number(r.approved_amount || 0), 0);
+        let alreadyApproved = 0;
+        let pendingRequested = 0;
+        periodReqs.forEach((r) => {
+          if (r.status === 'approved') {
+            alreadyApproved += Math.max(0, Number(r.approved_amount ?? r.requested_amount ?? 0));
+          } else {
+            pendingRequested += Math.max(
+              0,
+              Number(
+                r.status === 'approved_treasurer'
+                  ? r.approved_amount ?? r.requested_amount ?? 0
+                  : r.requested_amount ?? 0
+              )
+            );
+          }
+        });
+        const alreadyRequested = alreadyApproved + pendingRequested;
+        const netAfterApproved = Math.max(0, estimatedNet - alreadyApproved);
         const isPaid = payrollStatus === 'paid';
         const availableAmount = isPaid ? 0 : Math.max(0, estimatedNet - alreadyRequested);
 
@@ -2281,9 +2474,12 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           payroll_detail_id: matchingDetail ? matchingDetail.id : '',
           payroll_status: payrollStatus,
           is_paid: isPaid,
+          full_estimated_net_salary: estimatedNet,
           estimated_net_salary: estimatedNet,
+          net_after_approved_disbursement: netAfterApproved,
           already_requested_amount: alreadyRequested,
           already_approved_amount: alreadyApproved,
+          pending_requested_amount: pendingRequested,
           available_amount: availableAmount,
           details: detailsObj,
         };
@@ -2381,12 +2577,30 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       let estimatedNet = 0;
       let detailsSnapshot = {};
       if (matchingDetail) {
-        estimatedNet = Number(matchingDetail.net_salary || 0);
+        let rawDetails = {};
         try {
-          detailsSnapshot = JSON.parse(matchingDetail.details_json || '{}');
+          rawDetails = JSON.parse(matchingDetail.details_json || '{}');
         } catch {
-          detailsSnapshot = {};
+          rawDetails = {};
         }
+        const fullEstimatedNet =
+          rawDetails.net_salary_before_disbursement !== undefined &&
+          rawDetails.net_salary_before_disbursement !== ''
+            ? Math.max(0, Number(rawDetails.net_salary_before_disbursement))
+            : Math.max(
+                0,
+                Number(matchingDetail.net_salary || 0) +
+                  Number(rawDetails.approved_disbursement_total || 0)
+              );
+        estimatedNet = fullEstimatedNet;
+        detailsSnapshot = {
+          ...rawDetails,
+          net_salary_before_disbursement: fullEstimatedNet,
+          estimated_net_salary: fullEstimatedNet,
+          net_salary: fullEstimatedNet,
+        };
+        delete detailsSnapshot.approved_disbursement_total;
+        delete detailsSnapshot.approved_disbursement_count;
       } else {
         const comp = db.Salary_Components.find((c) => c.teacher_id === own.id) || {
           base_salary: 0,
@@ -2402,6 +2616,21 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             normalizePeriodKey(a.month) === periodKey &&
             Number(a.year) === year
         );
+        if (!att && parsedPeriod.isRange) {
+          const subRows = db.Attendances.filter(
+            (a) =>
+              a.teacher_id === own.id &&
+              Number(a.year) === year &&
+              rangeSet.has(normalizePeriodKey(a.month))
+          );
+          if (subRows.length > 0) {
+            att = {
+              present_days: subRows.reduce((s, r) => s + Number(r.present_days || 0), 0),
+              absent_days: subRows.reduce((s, r) => s + Number(r.absent_days || 0), 0),
+              total_jtm: subRows.reduce((s, r) => s + Number(r.total_jtm || 0), 0),
+            };
+          }
+        }
         if (!att) {
           const logs = (db.Attendance_Logs || []).filter(
             (l) =>
@@ -2461,6 +2690,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           custom_allowance_total: customAllowance,
           custom_deduction_total: customDeduction,
           gross_salary: gross,
+          net_salary_before_disbursement: estimatedNet,
+          estimated_net_salary: estimatedNet,
           net_salary: estimatedNet,
         };
       }
@@ -2469,9 +2700,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         .filter(
           (r) =>
             r.teacher_id === own.id &&
-            normalizePeriodKey(r.month) === periodKey &&
-            Number(r.year) === year &&
-            r.status !== 'rejected'
+            r.status !== 'rejected' &&
+            doesDisbursementMatchPeriod(r.month, r.year, periodKey, year)
         )
         .reduce(
           (s, r) =>
@@ -2732,9 +2962,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             (r) =>
               r.id !== target.id &&
               r.teacher_id === target.teacher_id &&
-              normalizePeriodKey(r.month) === normalizePeriodKey(target.month) &&
-              Number(r.year) === Number(target.year) &&
-              r.status === 'approved'
+              r.status === 'approved' &&
+              doesDisbursementMatchPeriod(r.month, r.year, target.month, target.year)
           )
           .reduce((s, r) => s + Number(r.approved_amount || 0), 0);
 
@@ -2786,7 +3015,15 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         );
       }
 
-      bumpVersions(['disbursements', 'notifications']);
+      if (decision === 'approve') {
+        bumpVersions(
+          ['disbursements', 'notifications'],
+          [],
+          [{ month: target.month, year: target.year }]
+        );
+      } else {
+        bumpVersions(['disbursements', 'notifications']);
+      }
       saveDb(db);
       return { ok: true, status: 200, data: target };
     }

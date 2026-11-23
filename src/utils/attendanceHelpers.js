@@ -1,7 +1,7 @@
 /**
  * Shared helpers for Teacher Self-Attendance & JTM condition weights:
- * - hadir : normal (1.0 present day, full JTM)
- * - tugas : half-day (0.5 present day, optional JTM)
+ * - hadir : normal (1.0 present day, 100% effective JTM = jtm_hours * 1)
+ * - tugas : half-day (0.5 present day, 50% effective JTM = jtm_hours * 0.5)
  * - sakit : counts as absent (0 present day, 1 absent day, 0 JTM)
  * - izin  : counts as absent (0 present day, 1 absent day, 0 JTM)
  */
@@ -22,20 +22,22 @@ export const ATTENDANCE_CONDITIONS = [
     badgeText: 'Normal (1 Hadir)',
     presentWeight: 1,
     absentWeight: 0,
+    jtmWeight: 1,
     allowsJtm: true,
-    defaultJtm: 4,
-    description: 'Masuk mengajar normal (nilai 1 hari hadir + JTM penuh).',
+    defaultJtm: 2,
+    description: 'Masuk mengajar normal (nilai 1 hari hadir + 100% JTM).',
     tone: 'good',
   },
   {
     id: 'tugas',
     label: 'Tugas',
-    badgeText: 'Setengah Hadir (0,5)',
+    badgeText: 'Setengah (0,5 / 50% JTM)',
     presentWeight: 0.5,
     absentWeight: 0,
+    jtmWeight: 0.5,
     allowsJtm: true,
-    defaultJtm: 0,
-    description: 'Tugas dinas/luar (bernilai 0,5 hari hadir; JTM opsional).',
+    defaultJtm: 2,
+    description: 'Tugas dinas/luar (bernilai 0,5 hari hadir dan 50% JTM efektif).',
     tone: 'warn',
   },
   {
@@ -44,6 +46,7 @@ export const ATTENDANCE_CONDITIONS = [
     badgeText: 'Tidak Hadir (0)',
     presentWeight: 0,
     absentWeight: 1,
+    jtmWeight: 0,
     allowsJtm: false,
     defaultJtm: 0,
     description: 'Tidak bernilai hadir maupun JTM (sama dengan tidak hadir).',
@@ -55,6 +58,7 @@ export const ATTENDANCE_CONDITIONS = [
     badgeText: 'Tidak Hadir (0)',
     presentWeight: 0,
     absentWeight: 1,
+    jtmWeight: 0,
     allowsJtm: false,
     defaultJtm: 0,
     description: 'Tidak bernilai hadir maupun JTM (sama dengan tidak hadir).',
@@ -81,7 +85,14 @@ export function getAttendanceConditionMeta(status) {
 export function roundAttendanceMetric(value) {
   const num = Number(value || 0);
   if (!Number.isFinite(num) || num < 0) return 0;
-  return Math.round(num * 10) / 10;
+  return Math.round(num * 100) / 100;
+}
+
+export function computeEffectiveJtmHours(status, rawJtmHours) {
+  const meta = getAttendanceConditionMeta(status);
+  if (!meta.allowsJtm || !meta.jtmWeight) return 0;
+  const raw = Math.max(0, Number(rawJtmHours || 0));
+  return roundAttendanceMetric(raw * meta.jtmWeight);
 }
 
 export function formatAttendanceNumber(value) {
@@ -148,8 +159,8 @@ export function computeAttendanceBreakdownFromLogs(logs = []) {
     else if (status === 'sakit') sakitCount += 1;
     else if (status === 'izin') izinCount += 1;
 
-    if (meta.allowsJtm) {
-      totalJtm += Math.max(0, Number(log.jtm_hours || 0));
+    if (meta.allowsJtm && meta.jtmWeight > 0) {
+      totalJtm += Math.max(0, Number(log.jtm_hours || 0)) * meta.jtmWeight;
     }
   }
 

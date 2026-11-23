@@ -182,7 +182,11 @@ export function GuruDashboard({
       const curPeriod = defaultPeriodRef.current;
       try {
         const tasks = [];
-        if (domainSet.has('teachers') || domainSet.has('payrolls')) {
+        if (
+          domainSet.has('teachers') ||
+          domainSet.has('payrolls') ||
+          domainSet.has('disbursements')
+        ) {
           tasks.push(
             api.get('dashboard.summary').then((sumData) => {
               setSummary(sumData);
@@ -330,7 +334,9 @@ export function GuruDashboard({
 
   const teacherProfile = summary?.teacher || {};
   const latestEstimateSlip = slips.find(
-    (s) => s.payroll_status === 'draft' || s.payroll_status === 'submitted'
+    (s) =>
+      s.slip_type !== 'disbursement' &&
+      (s.payroll_status === 'draft' || s.payroll_status === 'submitted')
   );
 
   const headerMeta =
@@ -459,25 +465,45 @@ export function GuruDashboard({
           </div>
 
           <div className="flex flex-wrap items-stretch gap-2.5">
-            {latestEstimateSlip && (
-              <div
-                className="nim-card-well px-4 py-3 min-w-[200px]"
-                style={{
-                  background: 'var(--accent-soft)',
-                  boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
-                }}
-              >
-                <span className="nim-kpi__label block">
-                  Estimasi Gaji Bersih ({getMonthName(latestEstimateSlip.month)})
-                </span>
-                <span className="mt-1 block text-lg sm:text-xl font-bold text-[var(--accent-text)] tabular-nums">
-                  {formatRupiah(latestEstimateSlip.net_salary || 0)}
-                </span>
-                <span className="mt-0.5 block text-[10.5px] text-[var(--muted)]">
-                  {SLIP_STATUS_META[latestEstimateSlip.payroll_status]?.badgeLabel}
-                </span>
-              </div>
-            )}
+            {latestEstimateSlip &&
+              (() => {
+                let estD = {};
+                try {
+                  estD = JSON.parse(latestEstimateSlip.details_json || '{}');
+                } catch {
+                  estD = {};
+                }
+                const estApprovedDisb = Number(estD.approved_disbursement_total || 0);
+                const estBeforeDisb = Number(
+                  estD.net_salary_before_disbursement ||
+                    Number(latestEstimateSlip.net_salary || 0) + estApprovedDisb
+                );
+                return (
+                  <div
+                    className="nim-card-well px-4 py-3 min-w-[200px]"
+                    style={{
+                      background: 'var(--accent-soft)',
+                      boxShadow: 'inset 0 0 0 1px var(--accent-glow)',
+                    }}
+                  >
+                    <span className="nim-kpi__label block">
+                      {estApprovedDisb > 0 ? 'Sisa Estimasi Gaji Bersih' : 'Estimasi Gaji Bersih'} (
+                      {getMonthName(latestEstimateSlip.month)})
+                    </span>
+                    <span className="mt-1 block text-lg sm:text-xl font-bold text-[var(--accent-text)] tabular-nums">
+                      {formatRupiah(latestEstimateSlip.net_salary || 0)}
+                    </span>
+                    <span className="mt-0.5 block text-[10.5px] text-[var(--muted)]">
+                      {SLIP_STATUS_META[latestEstimateSlip.payroll_status]?.badgeLabel}
+                      {estApprovedDisb > 0
+                        ? ` • Sudah cair ${formatRupiah(estApprovedDisb)} dari ${formatRupiah(
+                            estBeforeDisb
+                          )}`
+                        : ''}
+                    </span>
+                  </div>
+                );
+              })()}
             <div className="nim-card-well px-4 py-3 min-w-[190px]">
               <span className="nim-kpi__label block">Gaji Bersih Terakhir (Sah)</span>
               <span className="mt-1 block text-lg sm:text-xl font-bold text-[var(--good-text)] tabular-nums">
@@ -591,6 +617,18 @@ export function GuruDashboard({
               }
               const isDisbursementSlip =
                 slip.slip_type === 'disbursement' || d.slip_type === 'disbursement';
+              const approvedDisbTotal = !isDisbursementSlip
+                ? Math.max(0, Number(d.approved_disbursement_total || 0))
+                : 0;
+              const approvedDisbCount = !isDisbursementSlip
+                ? Number(d.approved_disbursement_count || 0)
+                : 0;
+              const fullNetBeforeDisb = !isDisbursementSlip
+                ? Number(
+                    d.net_salary_before_disbursement ??
+                      Number(slip.net_salary || 0) + approvedDisbTotal
+                  )
+                : 0;
               const statusMeta = isDisbursementSlip
                 ? {
                     badgeLabel: `Slip Pencairan Resmi (${
@@ -706,6 +744,20 @@ export function GuruDashboard({
                           </div>
                         );
                       })()}
+                      {approvedDisbTotal > 0 && (
+                        <div
+                          className="flex justify-between"
+                          style={{ color: 'var(--warn-text)' }}
+                        >
+                          <span>
+                            Pencairan Disetujui Kepsek
+                            {approvedDisbCount > 1 ? ` (${approvedDisbCount}×)` : ''}
+                          </span>
+                          <span className="font-semibold tabular-nums">
+                            - {formatRupiah(approvedDisbTotal)}
+                          </span>
+                        </div>
+                      )}
                     </div>
 
                     {isDisbursementSlip && (
@@ -734,7 +786,7 @@ export function GuruDashboard({
                     )}
 
                     <div
-                      className="flex items-center justify-between rounded-xl px-4 py-3"
+                      className="flex items-center justify-between gap-2 rounded-xl px-4 py-3"
                       style={{
                         background: statusMeta.isEstimate ? 'var(--warn-soft)' : 'var(--accent-soft)',
                         boxShadow: statusMeta.isEstimate
@@ -744,19 +796,30 @@ export function GuruDashboard({
                     >
                       <div className="flex items-center gap-2">
                         <Wallet
-                          className="h-4 w-4"
+                          className="h-4 w-4 shrink-0"
                           style={{
                             color: statusMeta.isEstimate
                               ? 'var(--warn-text)'
                               : 'var(--accent-text)',
                           }}
                         />
-                        <span className="text-xs font-bold uppercase text-[var(--ink)]">
-                          {statusMeta.netLabel}
-                        </span>
+                        <div>
+                          <span className="text-xs font-bold uppercase text-[var(--ink)] block">
+                            {approvedDisbTotal > 0
+                              ? statusMeta.isEstimate
+                                ? 'Sisa Estimasi Gaji Bersih (Net)'
+                                : 'Sisa Gaji Bersih (Take Home Pay)'
+                              : statusMeta.netLabel}
+                          </span>
+                          {approvedDisbTotal > 0 && fullNetBeforeDisb > 0 && (
+                            <span className="text-[10.5px] text-[var(--muted)] tabular-nums block">
+                              Sebelum pencairan: {formatRupiah(fullNetBeforeDisb)}
+                            </span>
+                          )}
+                        </div>
                       </div>
                       <span
-                        className="text-base sm:text-lg font-bold tabular-nums"
+                        className="text-base sm:text-lg font-bold tabular-nums shrink-0"
                         style={{
                           color: statusMeta.isEstimate ? 'var(--warn-text)' : 'var(--accent-text)',
                         }}

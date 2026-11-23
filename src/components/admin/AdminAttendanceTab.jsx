@@ -19,6 +19,7 @@ import {
 import {
   computeAttendanceBreakdownFromLogs,
   computeClassBreakdownFromLogs,
+  computeEffectiveJtmHours,
   formatAttendanceNumber,
   formatDateIndo,
   getAttendanceConditionMeta,
@@ -163,7 +164,7 @@ const AttendanceTeacherCard = React.memo(function AttendanceTeacherCard({
             </span>
             <span>•</span>
             <span>
-              Tugas: <strong>{logBreakdown.tugas_count}</strong> (×0,5)
+              Tugas: <strong>{logBreakdown.tugas_count}</strong> (×0,5 Hadir &amp; 50% JTM)
             </span>
             <span>•</span>
             <span>
@@ -205,6 +206,8 @@ const AttendanceTeacherCard = React.memo(function AttendanceTeacherCard({
                 const vMeta = getLogValidationMeta(vStatus);
                 const isInvalid = vStatus === 'invalid';
                 const isBusy = activeValidatingKey === lg.id;
+                const rawLogJtm = cond.allowsJtm ? Math.max(0, Number(lg.jtm_hours || 0)) : 0;
+                const effLogJtm = computeEffectiveJtmHours(lg.status, rawLogJtm);
                 const noteDraft =
                   rejectNoteDrafts[lg.id] !== undefined
                     ? rejectNoteDrafts[lg.id]
@@ -251,7 +254,12 @@ const AttendanceTeacherCard = React.memo(function AttendanceTeacherCard({
                           }`}
                         >
                           +{formatAttendanceNumber(cond.presentWeight)} •{' '}
-                          {formatAttendanceNumber(cond.allowsJtm ? lg.jtm_hours : 0)} JTM
+                          {cond.id === 'tugas' && rawLogJtm > 0
+                            ? `${formatAttendanceNumber(rawLogJtm)}×50% = ${formatAttendanceNumber(
+                                effLogJtm
+                              )}`
+                            : formatAttendanceNumber(effLogJtm)}{' '}
+                          JTM
                         </span>
 
                         <button
@@ -356,7 +364,7 @@ const AttendanceTeacherCard = React.memo(function AttendanceTeacherCard({
             <input
               type="number"
               min="0"
-              step="0.5"
+              step="any"
               max={200 * monthCount}
               value={safeRow.total_jtm}
               onChange={(e) => onAttFieldChange(teacher.id, 'total_jtm', e.target.value)}

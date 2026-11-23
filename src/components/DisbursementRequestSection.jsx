@@ -309,31 +309,70 @@ export function DisbursementRequestSection({
               </div>
 
               {/* Balance Metrics */}
-              <div className="nim-card-well p-3.5 space-y-2 text-xs">
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--muted)]">
-                    Estimasi Gaji Bersih ({getMonthName(activeEstimate.month)} {activeEstimate.year})
-                  </span>
-                  <span className="font-bold text-[var(--ink)] tabular-nums">
-                    {formatRupiah(activeEstimate.estimated_net_salary)}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-[var(--muted)]">Sudah Diajukan / Disetujui</span>
-                  <span className="font-semibold text-[var(--warn-text)] tabular-nums">
-                    - {formatRupiah(activeEstimate.already_requested_amount)}
-                  </span>
-                </div>
-                <div
-                  className="flex items-center justify-between pt-2"
-                  style={{ borderTop: '1px solid var(--line)' }}
-                >
-                  <span className="font-bold text-[var(--ink-2)]">Sisa Estimasi Dapat Diajukan</span>
-                  <span className="text-sm font-bold text-[var(--accent-text)] tabular-nums">
-                    {formatRupiah(available)}
-                  </span>
-                </div>
-              </div>
+              {(() => {
+                const fullEstNet = Number(
+                  activeEstimate.full_estimated_net_salary ??
+                    activeEstimate.estimated_net_salary ??
+                    0
+                );
+                const alreadyApproved = Number(activeEstimate.already_approved_amount || 0);
+                const pendingRequested =
+                  activeEstimate.pending_requested_amount !== undefined
+                    ? Number(activeEstimate.pending_requested_amount || 0)
+                    : Math.max(
+                        0,
+                        Number(activeEstimate.already_requested_amount || 0) - alreadyApproved
+                      );
+                return (
+                  <div className="nim-card-well p-3.5 space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[var(--muted)]">
+                        Estimasi Gaji Bersih Penuh ({getMonthName(activeEstimate.month)}{' '}
+                        {activeEstimate.year})
+                      </span>
+                      <span className="font-bold text-[var(--ink)] tabular-nums">
+                        {formatRupiah(fullEstNet)}
+                      </span>
+                    </div>
+                    {alreadyApproved > 0 && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--muted)]">Pencairan Disetujui Kepsek</span>
+                        <span className="font-semibold text-[var(--bad-text)] tabular-nums">
+                          - {formatRupiah(alreadyApproved)}
+                        </span>
+                      </div>
+                    )}
+                    {(pendingRequested > 0 || alreadyApproved === 0) && (
+                      <div className="flex items-center justify-between">
+                        <span className="text-[var(--muted)]">
+                          {alreadyApproved > 0
+                            ? 'Sedang Diajukan (Menunggu)'
+                            : 'Sudah Diajukan / Disetujui'}
+                        </span>
+                        <span className="font-semibold text-[var(--warn-text)] tabular-nums">
+                          -{' '}
+                          {formatRupiah(
+                            alreadyApproved > 0
+                              ? pendingRequested
+                              : activeEstimate.already_requested_amount
+                          )}
+                        </span>
+                      </div>
+                    )}
+                    <div
+                      className="flex items-center justify-between pt-2"
+                      style={{ borderTop: '1px solid var(--line)' }}
+                    >
+                      <span className="font-bold text-[var(--ink-2)]">
+                        Sisa Estimasi Dapat Diajukan
+                      </span>
+                      <span className="text-sm font-bold text-[var(--accent-text)] tabular-nums">
+                        {formatRupiah(available)}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
 
               <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Cakupan Pencairan */}
