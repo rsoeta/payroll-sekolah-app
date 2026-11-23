@@ -3,6 +3,7 @@ import {
   Search,
   X,
   ArrowRight,
+  Clock,
   Sun,
   Moon,
   Monitor,
@@ -78,6 +79,20 @@ export function CommandPalette({
     }
 
     const actions = [
+      {
+        id: 'act:theme-auto',
+        group: 'Tampilan & Aksi',
+        title: 'Tema Otomatis Sesuai Waktu (Default)',
+        sub:
+          themePref === 'auto'
+            ? 'Sedang aktif (Terang 06:00–17:59 • Gelap 18:00–05:59)'
+            : 'Terang di siang hari • Gelap di malam hari',
+        icon: Clock,
+        run: () => {
+          onThemeChange?.('auto');
+          onClose();
+        },
+      },
       {
         id: 'act:theme-dark',
         group: 'Tampilan & Aksi',

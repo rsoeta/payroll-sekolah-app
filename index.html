@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="id" data-theme="dark">
+<html lang="id">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, viewport-fit=cover" />
@@ -60,24 +60,31 @@
       (function (doc) {
         doc.classList.add('js');
         var width = window.innerWidth;
+        var hour = new Date().getHours();
+        var timeTheme = hour >= 6 && hour < 18 ? 'light' : 'dark';
+        var resolved = timeTheme;
         try {
           var rawTheme = localStorage.getItem('sipayroll:theme');
-          var theme = rawTheme ? JSON.parse(rawTheme) : 'dark';
-          var resolved =
-            theme === 'system'
-              ? window.matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light'
-              : theme === 'light'
-              ? 'light'
-              : 'dark';
-          doc.dataset.theme = resolved;
-          var meta = document.querySelector('meta[name="theme-color"]');
-          if (meta) meta.setAttribute('content', resolved === 'dark' ? '#050a18' : '#e9eef8');
+          var theme = 'auto';
+          if (rawTheme) {
+            theme = rawTheme.charAt(0) === '"' ? JSON.parse(rawTheme) : rawTheme;
+          }
+          if (theme === 'light' || theme === 'dark') {
+            resolved = theme;
+          } else if (theme === 'system') {
+            resolved = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          } else {
+            resolved = timeTheme;
+          }
           if (localStorage.getItem('sipayroll:rail') === '1' && width > 760) {
             doc.classList.add('is-rail');
           }
-        } catch (e) {}
+        } catch (e) {
+          resolved = timeTheme;
+        }
+        doc.dataset.theme = resolved;
+        var meta = document.querySelector('meta[name="theme-color"]');
+        if (meta) meta.setAttribute('content', resolved === 'dark' ? '#050a18' : '#e9eef8');
         if (width > 760 && width < 1280) {
           doc.classList.add('is-rail');
         }

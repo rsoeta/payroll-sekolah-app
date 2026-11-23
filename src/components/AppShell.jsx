@@ -287,6 +287,14 @@ export function AppShell({
     schoolProfile.school_name ||
     schoolProfile.foundation_name ||
     'Sistem Penggajian Sekolah & Yayasan';
+  const themeToggleLabel =
+    themePref === 'auto'
+      ? resolvedTheme === 'dark'
+        ? 'Mode Gelap (Otomatis Malam) — Klik ke Mode Terang'
+        : 'Mode Terang (Otomatis Siang) — Klik ke Mode Gelap'
+      : resolvedTheme === 'dark'
+      ? 'Beralih ke Mode Terang'
+      : 'Beralih ke Mode Gelap';
 
   // Group nav items preserving insertion order
   const groupedNav = navItems.reduce((acc, item) => {
@@ -512,10 +520,8 @@ export function AppShell({
                 <button
                   type="button"
                   onClick={handleToggleTheme}
-                  title={resolvedTheme === 'dark' ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap'}
-                  aria-label={
-                    resolvedTheme === 'dark' ? 'Beralih ke Mode Terang' : 'Beralih ke Mode Gelap'
-                  }
+                  title={themeToggleLabel}
+                  aria-label={themeToggleLabel}
                   className="nim-ibtn"
                 >
                   {resolvedTheme === 'dark' ? (

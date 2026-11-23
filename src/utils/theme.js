@@ -1,35 +1,55 @@
 const THEME_STORAGE_KEY = 'sipayroll:theme';
 const RAIL_STORAGE_KEY = 'sipayroll:rail';
 
+export const DAY_START_HOUR = 6; // 06:00 - 17:59 -> Mode Terang
+export const NIGHT_START_HOUR = 18; // 18:00 - 05:59 -> Mode Gelap
+
 const themeListeners = new Set();
 const railListeners = new Set();
 
+export function getTimeBasedTheme(date = new Date()) {
+  const hour = date.getHours();
+  return hour >= DAY_START_HOUR && hour < NIGHT_START_HOUR ? 'light' : 'dark';
+}
+
 export function resolveTheme(pref) {
+  if (pref === 'light' || pref === 'dark') {
+    return pref;
+  }
   if (pref === 'system') {
     if (typeof window !== 'undefined' && window.matchMedia) {
       return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
     }
-    return 'dark';
+    return getTimeBasedTheme();
   }
-  return pref === 'light' ? 'light' : 'dark';
+  return getTimeBasedTheme();
 }
 
 export function getThemePreference() {
   try {
     const raw = localStorage.getItem(THEME_STORAGE_KEY);
-    if (!raw) return 'dark';
+    if (!raw) return 'auto';
     const parsed = raw.startsWith('"') ? JSON.parse(raw) : raw;
-    if (parsed === 'light' || parsed === 'dark' || parsed === 'system') {
+    if (parsed === 'auto' || parsed === 'light' || parsed === 'dark' || parsed === 'system') {
       return parsed;
     }
   } catch {
-    // Fallback to dark theme
+    // Fallback to time-based auto theme
   }
-  return 'dark';
+  return 'auto';
+}
+
+function syncResolvedThemeToDom(resolved) {
+  if (typeof document === 'undefined') return;
+  document.documentElement.dataset.theme = resolved;
+  const metaTheme = document.querySelector('meta[name="theme-color"]');
+  if (metaTheme) {
+    metaTheme.setAttribute('content', resolved === 'dark' ? '#050a18' : '#e9eef8');
+  }
 }
 
 export function applyTheme(pref) {
-  const nextPref = pref === 'light' || pref === 'system' ? pref : 'dark';
+  const nextPref = pref === 'light' || pref === 'dark' || pref === 'system' ? pref : 'auto';
   const resolved = resolveTheme(nextPref);
   try {
     localStorage.setItem(THEME_STORAGE_KEY, JSON.stringify(nextPref));
@@ -37,14 +57,7 @@ export function applyTheme(pref) {
     // Ignore storage quota errors
   }
 
-  if (typeof document !== 'undefined') {
-    document.documentElement.dataset.theme = resolved;
-    const metaTheme = document.querySelector('meta[name="theme-color"]');
-    if (metaTheme) {
-      metaTheme.setAttribute('content', resolved === 'dark' ? '#050a18' : '#e9eef8');
-    }
-  }
-
+  syncResolvedThemeToDom(resolved);
   themeListeners.forEach((fn) => fn(nextPref, resolved));
   return resolved;
 }
@@ -83,14 +96,41 @@ export function subscribeRail(listener) {
   return () => railListeners.delete(listener);
 }
 
-if (typeof window !== 'undefined' && window.matchMedia) {
-  const media = window.matchMedia('(prefers-color-scheme: dark)');
-  const onSystemThemeChange = () => {
-    if (getThemePreference() === 'system') {
-      applyTheme('system');
+function refreshAutoThemeIfNeeded() {
+  if (getThemePreference() !== 'auto' || typeof document === 'undefined') return;
+  const resolved = getTimeBasedTheme();
+  if (document.documentElement.dataset.theme !== resolved) {
+    syncResolvedThemeToDom(resolved);
+    themeListeners.forEach((fn) => fn('auto', resolved));
+  }
+}
+
+if (typeof window !== 'undefined') {
+  if (window.matchMedia) {
+    const media = window.matchMedia('(prefers-color-scheme: dark)');
+    const onSystemThemeChange = () => {
+      if (getThemePreference() === 'system') {
+        const resolved = resolveTheme('system');
+        syncResolvedThemeToDom(resolved);
+        themeListeners.forEach((fn) => fn('system', resolved));
+      }
+    };
+    if (media.addEventListener) {
+      media.addEventListener('change', onSystemThemeChange);
     }
-  };
-  if (media.addEventListener) {
-    media.addEventListener('change', onSystemThemeChange);
+  }
+
+  const initialResolved = resolveTheme(getThemePreference());
+  if (typeof document !== 'undefined' && document.documentElement.dataset.theme !== initialResolved) {
+    syncResolvedThemeToDom(initialResolved);
+  }
+
+  window.setInterval(refreshAutoThemeIfNeeded, 60000);
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') {
+        refreshAutoThemeIfNeeded();
+      }
+    });
   }
 }
