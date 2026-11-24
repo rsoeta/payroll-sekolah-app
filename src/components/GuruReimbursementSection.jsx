@@ -3,7 +3,7 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
-  ExternalLink,
+  Eye,
   Info,
   Pencil,
   Receipt,
@@ -37,6 +37,7 @@ import {
 import ConfirmModal from './ConfirmModal';
 import DatePicker from './DatePicker';
 import PaginationBar from './admin/PaginationBar';
+import ReceiptLightboxModal from './ReceiptLightboxModal';
 
 export function GuruReimbursementSection({
   teacherProfile,
@@ -71,6 +72,7 @@ export function GuruReimbursementSection({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(8);
   const [deleteTarget, setDeleteTarget] = useState(null);
+  const [previewReceipt, setPreviewReceipt] = useState(null);
 
   const skipInitialFetchRef = useRef(hasPrefetch);
 
@@ -725,15 +727,14 @@ export function GuruReimbursementSection({
                         )}
                         {hasLink && (
                           <p>
-                            <a
-                              href={item.receipt_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
+                            <button
+                              type="button"
+                              onClick={() => setPreviewReceipt(item)}
                               className="inline-flex items-center gap-1 font-semibold text-[var(--accent-text)] hover:underline"
                             >
-                              <ExternalLink className="h-3 w-3" />
+                              <Eye className="h-3.5 w-3.5" />
                               <span>Lihat Bukti Nota</span>
-                            </a>
+                            </button>
                           </p>
                         )}
                       </div>
@@ -827,6 +828,21 @@ export function GuruReimbursementSection({
         variant="danger"
         onConfirm={confirmDelete}
         onCancel={() => setDeleteTarget(null)}
+      />
+
+      <ReceiptLightboxModal
+        isOpen={Boolean(previewReceipt)}
+        url={previewReceipt?.receipt_url || ''}
+        title={previewReceipt?.title || 'Bukti Nota Belanja'}
+        subtitle={
+          previewReceipt
+            ? `${formatExpenseDateIndo(previewReceipt.expense_date)} • ${formatRupiah(
+                previewReceipt.approved_amount ?? previewReceipt.amount
+              )}`
+            : ''
+        }
+        receiptNumber={previewReceipt?.receipt_number || ''}
+        onClose={() => setPreviewReceipt(null)}
       />
     </div>
   );

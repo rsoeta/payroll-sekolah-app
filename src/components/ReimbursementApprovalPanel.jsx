@@ -4,7 +4,7 @@ import {
   Calendar,
   Check,
   CheckCheck,
-  ExternalLink,
+  Eye,
   Receipt,
   RefreshCw,
   Search,
@@ -22,18 +22,22 @@ import {
 import { formatIsoDateTimeIndo } from '../utils/disbursementHelpers';
 import {
   formatExpenseDateIndo,
+  getAdminRoutineStatusMeta,
   getReimbursementCategoryMeta,
   getReimbursementStatusMeta,
   isSafeReceiptUrl,
 } from '../utils/reimbursementHelpers';
 import PaginationBar from './admin/PaginationBar';
+import ReceiptLightboxModal from './ReceiptLightboxModal';
 
 export function ReimbursementApprovalPanel({
   role = 'admin',
+  variant = 'ptk',
   items = [],
   onRefresh,
 }) {
   const isAdmin = role === 'admin';
+  const isRoutine = variant === 'admin_routine';
   const defaultFilter = isAdmin ? 'pending_treasurer' : 'approved_treasurer';
 
   const [statusFilter, setStatusFilter] = useState(defaultFilter);
@@ -47,6 +51,7 @@ export function ReimbursementApprovalPanel({
   const [amountEdits, setAmountEdits] = useState({});
   const [periodEdits, setPeriodEdits] = useState({});
   const [busyId, setBusyId] = useState('');
+  const [previewReceipt, setPreviewReceipt] = useState(null);
 
   const counts = useMemo(() => {
     const map = {
@@ -146,7 +151,11 @@ export function ReimbursementApprovalPanel({
         });
         notify.success(
           decision === 'approve'
-            ? `Penggantian belanja "${item.title}" DISETUJUI! Otomatis masuk kalkulasi slip gaji (Non-Infaq).`
+            ? isRoutine
+              ? `Belanja rutin "${item.title}" DISETUJUI! Status tercatat Disetujui Kepala Sekolah.`
+              : `Penggantian belanja "${item.title}" DISETUJUI! Otomatis masuk kalkulasi slip gaji (Non-Infaq).`
+            : isRoutine
+            ? `Belanja rutin "${item.title}" ditolak oleh Kepala Sekolah.`
             : `Catatan belanja ${item.teacher_name} ditolak oleh Kepala Sekolah.`
         );
       }
@@ -177,7 +186,9 @@ export function ReimbursementApprovalPanel({
           note: 'Diotorisasi kolektif oleh Kepala Sekolah.',
         });
         notify.success(
-          `${eligibleBulkIds.length} penggantian belanja DISETUJUI kolektif & masuk perhitungan slip gaji (Non-Infaq).`
+          isRoutine
+            ? `${eligibleBulkIds.length} belanja rutin Bendahara DISETUJUI kolektif oleh Kepala Sekolah.`
+            : `${eligibleBulkIds.length} penggantian belanja DISETUJUI kolektif & masuk perhitungan slip gaji (Non-Infaq).`
         );
       }
       emitDataChange(['reimbursements', 'notifications'], { source: 'reimb_panel_local' });
@@ -189,7 +200,14 @@ export function ReimbursementApprovalPanel({
     }
   };
 
-  const filterTabs = isAdmin
+  const filterTabs = isRoutine
+    ? [
+        { id: 'approved_treasurer', label: `Perlu Otorisasi (${counts.approved_treasurer})` },
+        { id: 'approved', label: `Disetujui (${counts.approved})` },
+        { id: 'rejected', label: `Ditolak (${counts.rejected})` },
+        { id: 'all', label: `Semua (${counts.all})` },
+      ]
+    : isAdmin
     ? [
         { id: 'pending_treasurer', label: `Menunggu Bendahara (${counts.pending_treasurer})` },
         { id: 'approved_treasurer', label: `Menunggu Kepsek (${counts.approved_treasurer})` },
@@ -215,12 +233,16 @@ export function ReimbursementApprovalPanel({
             </span>
             <div>
               <h2 className="text-base sm:text-lg font-bold text-[var(--ink)]">
-                {isAdmin
+                {isRoutine
+                  ? 'Otorisasi Belanja Sekolah Rutinan Bendahara'
+                  : isAdmin
                   ? 'Verifikasi Belanja Sekolah PTK (Reimbursement)'
                   : 'Otorisasi Belanja Sekolah PTK (Piutang Non-Infaq)'}
               </h2>
               <p className="text-xs text-[var(--muted)]">
-                {isAdmin
+                {isRoutine
+                  ? 'Berikan otorisasi akhir atas pengeluaran rutin sekolah yang ditalangi Bendahara (WiFi, polybag pesantren ekologi, makanan warung, amplop, tinta/kertas, domain, token, dll). Tidak memengaruhi slip gaji PTK.'
+                  : isAdmin
                   ? 'Periksa catatan pengeluaran keperluan sekolah dari PTK, sesuaikan nominal atau periode slip bila perlu, lalu teruskan ke Kepala Sekolah.'
                   : 'Berikan otorisasi akhir atas pengeluaran sekolah yang ditalangi PTK agar diganti utuh di slip gaji tanpa potongan Infaq 2,5%.'}
               </p>
@@ -239,6 +261,8 @@ export function ReimbursementApprovalPanel({
                 <span>
                   {isAdmin
                     ? `Setujui Kolektif (${eligibleBulkIds.length})`
+                    : isRoutine
+                    ? `Otorisasi Belanja Rutin (${eligibleBulkIds.length})`
                     : `Otorisasi Semua (${eligibleBulkIds.length})`}
                 </span>
               </button>
@@ -332,7 +356,11 @@ export function ReimbursementApprovalPanel({
 
       {filteredItems.length === 0 ? (
         <div className="nim-glass nim-card p-8 text-center text-xs text-[var(--muted)]">
-          {items.length === 0
+          {isRoutine
+            ? items.length === 0
+              ? 'Belum ada catatan belanja sekolah rutinan dari Bendahara.'
+              : 'Tidak ada catatan belanja rutin yang sesuai dengan filter.'
+            : items.length === 0
             ? 'Belum ada catatan pengeluaran keperluan sekolah dari PTK.'
             : 'Tidak ada catatan belanja PTK yang sesuai dengan filter.'}
         </div>
@@ -340,7 +368,9 @@ export function ReimbursementApprovalPanel({
         <>
           <div className="fluid-container">
             {pagedItems.map((item) => {
-              const stMeta = getReimbursementStatusMeta(item.status);
+              const stMeta = isRoutine
+                ? getAdminRoutineStatusMeta(item.status)
+                : getReimbursementStatusMeta(item.status);
               const catMeta = getReimbursementCategoryMeta(item.category);
               const canAction = isAdmin
                 ? item.status === 'pending_treasurer'
@@ -365,8 +395,13 @@ export function ReimbursementApprovalPanel({
                       <div>
                         <h3 className="text-sm font-bold text-[var(--ink)]">{item.title}</h3>
                         <p className="text-xs text-[var(--muted)]">
-                          {item.teacher_name} (NIP: {item.nip}) • Dicatat{' '}
-                          {formatIsoDateTimeIndo(item.created_at)}
+                          {isRoutine
+                            ? `${item.teacher_name || 'Bendahara / Admin'} • Dicatat ${formatIsoDateTimeIndo(
+                                item.created_at
+                              )}`
+                            : `${item.teacher_name} (NIP: ${item.nip}) • Dicatat ${formatIsoDateTimeIndo(
+                                item.created_at
+                              )}`}
                         </p>
                         <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
                           <span className="nim-badge !text-[10.5px]">
@@ -374,7 +409,7 @@ export function ReimbursementApprovalPanel({
                             Belanja {formatExpenseDateIndo(item.expense_date)}
                           </span>
                           <span className="nim-badge nim-badge--accent !text-[10.5px]">
-                            Slip: {getMonthName(item.month)} {item.year}
+                            {isRoutine ? 'Periode' : 'Slip'}: {getMonthName(item.month)} {item.year}
                           </span>
                           <span className="nim-badge !text-[10.5px]">{catMeta.label}</span>
                         </div>
@@ -384,7 +419,9 @@ export function ReimbursementApprovalPanel({
 
                     <div className="nim-card-well p-3 space-y-1.5 text-xs">
                       <div className="flex justify-between">
-                        <span className="text-[var(--muted)]">Nominal Diajukan PTK</span>
+                        <span className="text-[var(--muted)]">
+                          {isRoutine ? 'Nominal Belanja Rutin' : 'Nominal Diajukan PTK'}
+                        </span>
                         <span className="font-bold text-[var(--ink)] tabular-nums">
                           {formatRupiah(item.amount)}
                         </span>
@@ -393,7 +430,9 @@ export function ReimbursementApprovalPanel({
                         <div className="flex justify-between">
                           <span className="text-[var(--muted)]">
                             {item.status === 'approved'
-                              ? 'Disetujui Masuk Slip (Non-Infaq)'
+                              ? isRoutine
+                                ? 'Disetujui Kepsek (Non-Slip PTK)'
+                                : 'Disetujui Masuk Slip (Non-Infaq)'
                               : 'Disetujui Bendahara'}
                           </span>
                           <span className="font-bold text-[var(--good-text)] tabular-nums">
@@ -418,15 +457,14 @@ export function ReimbursementApprovalPanel({
                     )}
                     {hasLink && (
                       <p className="text-xs">
-                        <a
-                          href={item.receipt_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <button
+                          type="button"
+                          onClick={() => setPreviewReceipt(item)}
                           className="inline-flex items-center gap-1 font-semibold text-[var(--accent-text)] hover:underline"
                         >
-                          <ExternalLink className="h-3.5 w-3.5" />
-                          <span>Buka Tautan Bukti Nota</span>
-                        </a>
+                          <Eye className="h-3.5 w-3.5" />
+                          <span>Lihat Bukti Nota</span>
+                        </button>
                       </p>
                     )}
                     {item.treasurer_note && (
@@ -565,6 +603,8 @@ export function ReimbursementApprovalPanel({
                             ? 'Memproses...'
                             : isAdmin
                             ? 'Setujui & Teruskan ke Kepsek'
+                            : isRoutine
+                            ? 'Setujui Belanja Rutin Bendahara'
                             : 'Setujui (Masuk Slip Non-Infaq)'}
                         </span>
                       </button>
@@ -588,6 +628,21 @@ export function ReimbursementApprovalPanel({
           />
         </>
       )}
+
+      <ReceiptLightboxModal
+        isOpen={Boolean(previewReceipt)}
+        url={previewReceipt?.receipt_url || ''}
+        title={previewReceipt?.title || 'Bukti Nota Belanja'}
+        subtitle={
+          previewReceipt
+            ? `${previewReceipt.teacher_name || 'PTK'} • ${formatExpenseDateIndo(
+                previewReceipt.expense_date
+              )} • ${formatRupiah(previewReceipt.approved_amount ?? previewReceipt.amount)}`
+            : ''
+        }
+        receiptNumber={previewReceipt?.receipt_number || ''}
+        onClose={() => setPreviewReceipt(null)}
+      />
     </section>
   );
 }

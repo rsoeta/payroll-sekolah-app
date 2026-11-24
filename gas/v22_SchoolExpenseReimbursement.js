@@ -167,6 +167,8 @@ const ROLES = Object.freeze({
   GURU: 'guru',
 });
 
+const ADMIN_ROUTINE_TEACHER_ID = 'ADMIN_ROUTINE';
+
 const PAYROLL_STATUS = Object.freeze({
   DRAFT: 'draft',
   SUBMITTED: 'submitted',
@@ -432,15 +434,24 @@ function routeAuthenticatedRequest(method, action, payload, session) {
         return handleListReimbursements(session);
 
       case 'reimbursements.create':
-        if (method !== 'POST' || session.role !== ROLES.GURU) return forbiddenResponse();
+        if (method !== 'POST' || ![ROLES.GURU, ROLES.ADMIN].includes(session.role)) {
+          return forbiddenResponse();
+        }
         return handleCreateReimbursement(session, payload);
 
       case 'reimbursements.update':
-        if (!['POST', 'PUT'].includes(method) || session.role !== ROLES.GURU) return forbiddenResponse();
+        if (
+          !['POST', 'PUT'].includes(method) ||
+          ![ROLES.GURU, ROLES.ADMIN].includes(session.role)
+        ) {
+          return forbiddenResponse();
+        }
         return handleUpdateReimbursement(session, payload);
 
       case 'reimbursements.delete':
-        if (method !== 'DELETE' || session.role !== ROLES.GURU) return forbiddenResponse();
+        if (method !== 'DELETE' || ![ROLES.GURU, ROLES.ADMIN].includes(session.role)) {
+          return forbiddenResponse();
+        }
         return handleDeleteReimbursement(session, payload);
 
       case 'reimbursements.treasurerReview':
@@ -4308,6 +4319,7 @@ function enrichPayrollsWithSyncStatusGas(payrolls) {
       }
       var hasApprovedReimb = cachedReimbursements.some(function (r) {
         return (
+          String(r.teacher_id) !== ADMIN_ROUTINE_TEACHER_ID &&
           String(r.status) === 'approved' &&
           doesDisbursementMatchPeriodGas(r.month, r.year, p.month, p.year)
         );
@@ -4384,8 +4396,9 @@ function handleListReimbursements(session) {
 }
 
 function handleCreateReimbursement(session, payload) {
-  var ownTeacher = resolveOwnedTeacherRecord(session);
-  if (!ownTeacher) return forbiddenResponse();
+  var isAdminRoutine = session.role === ROLES.ADMIN;
+  var ownTeacher = isAdminRoutine ? null : resolveOwnedTeacherRecord(session);
+  if (!isAdminRoutine && !ownTeacher) return forbiddenResponse();
 
   var expenseDate = sanitizeString(payload.expense_date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
@@ -4402,7 +4415,7 @@ function handleCreateReimbursement(session, payload) {
   if (!periodKey || !year || year < 2020 || year > 2100) {
     return buildJsonResponse(400, { ok: false, error: 'Periode bulan/tahun masuk slip gaji tidak valid.' });
   }
-  if (isTargetPayrollPeriodLockedGas(periodKey, year)) {
+  if (!isAdminRoutine && isTargetPayrollPeriodLockedGas(periodKey, year)) {
     return buildJsonResponse(409, {
       ok: false,
       error: 'Periode penggajian tujuan sudah diajukan/dikunci. Pilih periode bulan berikutnya.',
@@ -4424,31 +4437,86 @@ function handleCreateReimbursement(session, payload) {
 
   var nowIso = new Date().toISOString();
   var storedMonth = /^\d+$/.test(periodKey) ? Number(periodKey) : periodKey;
+  var actorName =
+    sanitizeString(session.teacherName || session.name || 'Bendahara / Admin') ||
+    'Bendahara / Admin';
   var newItem = {
     id: Utilities.getUuid(),
-    teacher_id: String(ownTeacher.id),
-    teacher_name: ownTeacher.name,
-    nip: ownTeacher.nip,
+    teacher_id: isAdminRoutine ? ADMIN_ROUTINE_TEACHER_ID : String(ownTeacher.id),
+    teacher_name: isAdminRoutine ? actorName : ownTeacher.name,
+    nip: isAdminRoutine ? 'BENDAHARA' : ownTeacher.nip,
     expense_date: "'" + expenseDate,
     month: storedMonth,
     year: year,
-    category: sanitizeString(payload.category || 'lainnya').slice(0, 40) || 'lainnya',
+    category:
+      sanitizeString(payload.category || (isAdminRoutine ? 'utilitas' : 'lainnya')).slice(0, 40) ||
+      'lainnya',
     title: title,
     receipt_number: sanitizeString(payload.receipt_number || '').slice(0, 80),
     receipt_url: urlCheck.value,
     note: sanitizeString(payload.note || '').slice(0, 300),
     amount: amount,
     approved_amount: amount,
-    status: 'pending_treasurer',
-    treasurer_note: '',
+    status: isAdminRoutine ? 'approved_treasurer' : 'pending_treasurer',
+    treasurer_note: isAdminRoutine ? 'Dicatat langsung oleh Bendahara / Admin.' : '',
     kepsek_note: '',
     created_at: nowIso,
     updated_at: nowIso,
-    treasurer_reviewed_at: '',
+    treasurer_reviewed_at: isAdminRoutine ? nowIso : '',
     kepsek_reviewed_at: '',
   };
 
   appendSheetRecord(SHEETS.REIMBURSEMENTS, newItem);
+
+  var schoolName = getSchoolDisplayNameGas();
+  if (isAdminRoutine) {
+    var kepsekEmails = getRoleEmailListGas(ROLES.KEPSEK);
+    createNotificationRecordGas({
+      recipient_role: ROLES.KEPSEK,
+      recipient_teacher_id: '',
+      recipient_email: kepsekEmails.join(', '),
+      title: 'Belanja Rutin Bendahara Menunggu Otorisasi',
+      message:
+        actorName +
+        ' mencatat belanja sekolah rutinan "' +
+        title +
+        '" sebesar ' +
+        formatRupiahGas(amount) +
+        ' untuk periode ' +
+        storedMonth +
+        '/' +
+        year +
+        '.',
+      type: 'reimbursement_treasurer_approved',
+      ref_id: newItem.id,
+    });
+
+    var kepsekEmailSent = sendNotificationEmailGas(
+      kepsekEmails,
+      '[SIPAYROLL] Belanja Sekolah Rutin Bendahara — ' + formatRupiahGas(amount),
+      'Yth. Kepala Sekolah ' +
+        schoolName +
+        ',\n\n' +
+        actorName +
+        ' mencatat pengeluaran belanja sekolah rutinan yang memerlukan otorisasi Kepala Sekolah (Non-Slip PTK):\n' +
+        '- Tanggal Belanja : ' + expenseDate + '\n' +
+        '- Uraian          : ' + title + '\n' +
+        '- Nominal         : ' + formatRupiahGas(amount) + '\n' +
+        '- Periode         : ' + storedMonth + '/' + year + '\n' +
+        (newItem.receipt_number ? '- Nomor Nota      : ' + newItem.receipt_number + '\n' : '') +
+        '\nSilakan login ke SIPAYROLL -> Menu Belanja Sekolah untuk meninjau & mengotorisasi.'
+    );
+
+    bumpSyncVersionGas(['reimbursements', 'notifications']);
+    return buildJsonResponse(201, {
+      ok: true,
+      data: {
+        item: Object.assign({}, newItem, { expense_date: expenseDate }),
+        notified_kepsek_emails: kepsekEmails,
+        email_sent: kepsekEmailSent,
+      },
+    });
+  }
 
   var adminEmails = getRoleEmailListGas(ROLES.ADMIN);
   createNotificationRecordGas({
@@ -4471,7 +4539,6 @@ function handleCreateReimbursement(session, payload) {
     ref_id: newItem.id,
   });
 
-  var schoolName = getSchoolDisplayNameGas();
   var emailSent = sendNotificationEmailGas(
     adminEmails,
     '[SIPAYROLL] Catatan Belanja Sekolah Baru — ' + ownTeacher.name + ' (' + formatRupiahGas(amount) + ')',
@@ -4502,8 +4569,9 @@ function handleCreateReimbursement(session, payload) {
 }
 
 function handleUpdateReimbursement(session, payload) {
-  var ownTeacher = resolveOwnedTeacherRecord(session);
-  if (!ownTeacher) return forbiddenResponse();
+  var isAdminRoutine = session.role === ROLES.ADMIN;
+  var ownTeacher = isAdminRoutine ? null : resolveOwnedTeacherRecord(session);
+  if (!isAdminRoutine && !ownTeacher) return forbiddenResponse();
 
   var targetId = sanitizeString(payload.id);
   if (!targetId) return notFoundResponse();
@@ -4513,12 +4581,23 @@ function handleUpdateReimbursement(session, payload) {
     return String(r.id) === targetId;
   });
   if (!target) return notFoundResponse();
-  if (String(target.teacher_id) !== String(ownTeacher.id)) return forbiddenResponse();
-  if (String(target.status) !== 'pending_treasurer') {
-    return buildJsonResponse(409, {
-      ok: false,
-      error: 'Hanya catatan yang masih menunggu verifikasi Bendahara yang dapat diubah.',
-    });
+  if (isAdminRoutine) {
+    if (String(target.teacher_id) !== ADMIN_ROUTINE_TEACHER_ID) return forbiddenResponse();
+    if (String(target.status) !== 'approved_treasurer') {
+      return buildJsonResponse(409, {
+        ok: false,
+        error:
+          'Hanya catatan belanja rutin yang masih menunggu otorisasi Kepala Sekolah yang dapat diubah.',
+      });
+    }
+  } else {
+    if (String(target.teacher_id) !== String(ownTeacher.id)) return forbiddenResponse();
+    if (String(target.status) !== 'pending_treasurer') {
+      return buildJsonResponse(409, {
+        ok: false,
+        error: 'Hanya catatan yang masih menunggu verifikasi Bendahara yang dapat diubah.',
+      });
+    }
   }
 
   var expenseDate = sanitizeString(payload.expense_date || '');
@@ -4536,7 +4615,7 @@ function handleUpdateReimbursement(session, payload) {
   if (!periodKey || !year || year < 2020 || year > 2100) {
     return buildJsonResponse(400, { ok: false, error: 'Periode bulan/tahun masuk slip gaji tidak valid.' });
   }
-  if (isTargetPayrollPeriodLockedGas(periodKey, year)) {
+  if (!isAdminRoutine && isTargetPayrollPeriodLockedGas(periodKey, year)) {
     return buildJsonResponse(409, {
       ok: false,
       error: 'Periode penggajian tujuan sudah diajukan/dikunci. Pilih periode bulan berikutnya.',
@@ -4563,7 +4642,9 @@ function handleUpdateReimbursement(session, payload) {
       expense_date: "'" + expenseDate,
       month: storedMonth,
       year: year,
-      category: sanitizeString(payload.category || 'lainnya').slice(0, 40) || 'lainnya',
+      category:
+        sanitizeString(payload.category || (isAdminRoutine ? 'utilitas' : 'lainnya')).slice(0, 40) ||
+        'lainnya',
       title: title,
       receipt_number: sanitizeString(payload.receipt_number || '').slice(0, 80),
       receipt_url: urlCheck.value,
@@ -4582,8 +4663,9 @@ function handleUpdateReimbursement(session, payload) {
 }
 
 function handleDeleteReimbursement(session, payload) {
-  var ownTeacher = resolveOwnedTeacherRecord(session);
-  if (!ownTeacher) return forbiddenResponse();
+  var isAdminRoutine = session.role === ROLES.ADMIN;
+  var ownTeacher = isAdminRoutine ? null : resolveOwnedTeacherRecord(session);
+  if (!isAdminRoutine && !ownTeacher) return forbiddenResponse();
 
   var targetId = sanitizeString(payload.id);
   if (!targetId) return notFoundResponse();
@@ -4593,12 +4675,22 @@ function handleDeleteReimbursement(session, payload) {
     return String(r.id) === targetId;
   });
   if (!target) return notFoundResponse();
-  if (String(target.teacher_id) !== String(ownTeacher.id)) return forbiddenResponse();
-  if (String(target.status) !== 'pending_treasurer') {
-    return buildJsonResponse(409, {
-      ok: false,
-      error: 'Catatan yang sudah diproses Bendahara/Kepsek tidak dapat dihapus.',
-    });
+  if (isAdminRoutine) {
+    if (String(target.teacher_id) !== ADMIN_ROUTINE_TEACHER_ID) return forbiddenResponse();
+    if (String(target.status) !== 'approved_treasurer') {
+      return buildJsonResponse(409, {
+        ok: false,
+        error: 'Catatan belanja rutin yang sudah diotorisasi/ditolak Kepsek tidak dapat dihapus.',
+      });
+    }
+  } else {
+    if (String(target.teacher_id) !== String(ownTeacher.id)) return forbiddenResponse();
+    if (String(target.status) !== 'pending_treasurer') {
+      return buildJsonResponse(409, {
+        ok: false,
+        error: 'Catatan yang sudah diproses Bendahara/Kepsek tidak dapat dihapus.',
+      });
+    }
   }
 
   deleteSheetRecordById(SHEETS.REIMBURSEMENTS, targetId);
@@ -4834,6 +4926,7 @@ function handleKepsekReviewReimbursement(payload) {
   var note = sanitizeString(payload.note || '').slice(0, 240);
   var nowIso = new Date().toISOString();
   var cleanExpenseDate = normalizeDateStringGas(target.expense_date);
+  var isAdminRoutine = String(target.teacher_id) === ADMIN_ROUTINE_TEACHER_ID;
   var updated;
 
   if (decision === 'reject') {
@@ -4847,26 +4940,45 @@ function handleKepsekReviewReimbursement(payload) {
       });
     });
 
-    createNotificationRecordGas({
-      recipient_role: ROLES.GURU,
-      recipient_teacher_id: target.teacher_id,
-      title: 'Belanja Sekolah Ditolak Kepsek',
-      message:
-        'Penggantian belanja "' +
-        target.title +
-        '" periode ' +
-        target.month +
-        '/' +
-        target.year +
-        ' tidak disetujui Kepala Sekolah.' +
-        (note ? ' Alasan: ' + note : ''),
-      type: 'reimbursement_rejected',
-      ref_id: target.id,
-    });
+    if (isAdminRoutine) {
+      createNotificationRecordGas({
+        recipient_role: ROLES.ADMIN,
+        recipient_teacher_id: '',
+        title: 'Belanja Rutin Bendahara Ditolak Kepsek',
+        message:
+          'Belanja sekolah rutinan "' +
+          target.title +
+          '" periode ' +
+          target.month +
+          '/' +
+          target.year +
+          ' tidak disetujui Kepala Sekolah.' +
+          (note ? ' Alasan: ' + note : ''),
+        type: 'reimbursement_rejected',
+        ref_id: target.id,
+      });
+    } else {
+      createNotificationRecordGas({
+        recipient_role: ROLES.GURU,
+        recipient_teacher_id: target.teacher_id,
+        title: 'Belanja Sekolah Ditolak Kepsek',
+        message:
+          'Penggantian belanja "' +
+          target.title +
+          '" periode ' +
+          target.month +
+          '/' +
+          target.year +
+          ' tidak disetujui Kepala Sekolah.' +
+          (note ? ' Alasan: ' + note : ''),
+        type: 'reimbursement_rejected',
+        ref_id: target.id,
+      });
+    }
 
     bumpSyncVersionGas(['reimbursements', 'notifications']);
   } else {
-    if (isTargetPayrollPeriodLockedGas(target.month, target.year)) {
+    if (!isAdminRoutine && isTargetPayrollPeriodLockedGas(target.month, target.year)) {
       return buildJsonResponse(409, {
         ok: false,
         error:
@@ -4896,80 +5008,115 @@ function handleKepsekReviewReimbursement(payload) {
       });
     });
 
-    createNotificationRecordGas({
-      recipient_role: ROLES.GURU,
-      recipient_teacher_id: target.teacher_id,
-      title: 'Penggantian Belanja Sekolah Disetujui!',
-      message:
-        'Belanja "' +
-        target.title +
-        '" sebesar ' +
-        formatRupiahGas(approvedAmt) +
-        ' disetujui Kepsek dan masuk slip gaji ' +
-        target.month +
-        '/' +
-        target.year +
-        ' (Bebas Infaq 2,5%).',
-      type: 'reimbursement_approved',
-      ref_id: target.id,
-    });
-
-    createNotificationRecordGas({
-      recipient_role: ROLES.ADMIN,
-      title: 'Belanja Sekolah Disetujui: ' + target.teacher_name,
-      message:
-        'Kepsek menyetujui penggantian belanja "' +
-        target.title +
-        '" (' +
-        target.teacher_name +
-        ') sebesar ' +
-        formatRupiahGas(approvedAmt) +
-        ' untuk slip ' +
-        target.month +
-        '/' +
-        target.year +
-        '.',
-      type: 'reimbursement_approved',
-      ref_id: target.id,
-    });
-
-    var teachers = readSheetRecords(SHEETS.TEACHERS);
-    var teacherRow = teachers.find(function (t) {
-      return String(t.id) === String(target.teacher_id);
-    });
-    if (teacherRow) {
-      var users = readSheetRecords(SHEETS.USERS_AUTH);
-      var linkedUser = users.find(function (u) {
-        return String(u.id) === String(teacherRow.user_id);
+    if (isAdminRoutine) {
+      var adminEmailsRoutine = getRoleEmailListGas(ROLES.ADMIN);
+      createNotificationRecordGas({
+        recipient_role: ROLES.ADMIN,
+        recipient_email: adminEmailsRoutine.join(', '),
+        title: 'Belanja Rutin Bendahara Disetujui Kepsek!',
+        message:
+          'Pengeluaran rutin "' +
+          target.title +
+          '" sebesar ' +
+          formatRupiahGas(approvedAmt) +
+          ' (periode ' +
+          target.month +
+          '/' +
+          target.year +
+          ') telah disetujui Kepala Sekolah.',
+        type: 'reimbursement_approved',
+        ref_id: target.id,
       });
-      var teacherEmail = linkedUser
-        ? sanitizeString(linkedUser.email || linkedUser.username || '').toLowerCase()
-        : '';
-      if (teacherEmail && teacherEmail.indexOf('@') !== -1) {
-        sendNotificationEmailGas(
-          [teacherEmail],
-          '[SIPAYROLL] Penggantian Belanja Sekolah Disetujui (' + formatRupiahGas(approvedAmt) + ')',
-          'Yth. ' +
-            target.teacher_name +
-            ',\n\nCatatan belanja sekolah "' +
-            target.title +
-            '" sebesar ' +
-            formatRupiahGas(approvedAmt) +
-            ' telah disetujui Bendahara dan Kepala Sekolah.\nPenggantian akan masuk ke Slip Gaji periode ' +
-            target.month +
-            '/' +
-            target.year +
-            ' tanpa potongan Infaq 2,5%.'
-        );
-      }
-    }
+      sendNotificationEmailGas(
+        adminEmailsRoutine,
+        '[SIPAYROLL] Belanja Rutin Bendahara Disetujui Kepsek (' + formatRupiahGas(approvedAmt) + ')',
+        'Yth. Admin / Bendahara,\n\nCatatan belanja sekolah rutinan "' +
+          target.title +
+          '" sebesar ' +
+          formatRupiahGas(approvedAmt) +
+          ' (periode ' +
+          target.month +
+          '/' +
+          target.year +
+          ') telah disetujui oleh Kepala Sekolah.'
+      );
+      bumpSyncVersionGas(['reimbursements', 'notifications']);
+    } else {
+      createNotificationRecordGas({
+        recipient_role: ROLES.GURU,
+        recipient_teacher_id: target.teacher_id,
+        title: 'Penggantian Belanja Sekolah Disetujui!',
+        message:
+          'Belanja "' +
+          target.title +
+          '" sebesar ' +
+          formatRupiahGas(approvedAmt) +
+          ' disetujui Kepsek dan masuk slip gaji ' +
+          target.month +
+          '/' +
+          target.year +
+          ' (Bebas Infaq 2,5%).',
+        type: 'reimbursement_approved',
+        ref_id: target.id,
+      });
 
-    bumpSyncVersionGas(
-      ['reimbursements', 'notifications'],
-      null,
-      null,
-      [{ month: target.month, year: target.year }]
-    );
+      createNotificationRecordGas({
+        recipient_role: ROLES.ADMIN,
+        title: 'Belanja Sekolah Disetujui: ' + target.teacher_name,
+        message:
+          'Kepsek menyetujui penggantian belanja "' +
+          target.title +
+          '" (' +
+          target.teacher_name +
+          ') sebesar ' +
+          formatRupiahGas(approvedAmt) +
+          ' untuk slip ' +
+          target.month +
+          '/' +
+          target.year +
+          '.',
+        type: 'reimbursement_approved',
+        ref_id: target.id,
+      });
+
+      var teachers = readSheetRecords(SHEETS.TEACHERS);
+      var teacherRow = teachers.find(function (t) {
+        return String(t.id) === String(target.teacher_id);
+      });
+      if (teacherRow) {
+        var users = readSheetRecords(SHEETS.USERS_AUTH);
+        var linkedUser = users.find(function (u) {
+          return String(u.id) === String(teacherRow.user_id);
+        });
+        var teacherEmail = linkedUser
+          ? sanitizeString(linkedUser.email || linkedUser.username || '').toLowerCase()
+          : '';
+        if (teacherEmail && teacherEmail.indexOf('@') !== -1) {
+          sendNotificationEmailGas(
+            [teacherEmail],
+            '[SIPAYROLL] Penggantian Belanja Sekolah Disetujui (' + formatRupiahGas(approvedAmt) + ')',
+            'Yth. ' +
+              target.teacher_name +
+              ',\n\nCatatan belanja sekolah "' +
+              target.title +
+              '" sebesar ' +
+              formatRupiahGas(approvedAmt) +
+              ' telah disetujui Bendahara dan Kepala Sekolah.\nPenggantian akan masuk ke Slip Gaji periode ' +
+              target.month +
+              '/' +
+              target.year +
+              ' tanpa potongan Infaq 2,5%.'
+          );
+        }
+      }
+
+      bumpSyncVersionGas(
+        ['reimbursements', 'notifications'],
+        null,
+        null,
+        [{ month: target.month, year: target.year }]
+      );
+    }
   }
 
   return buildJsonResponse(200, {
@@ -4997,7 +5144,8 @@ function handleBulkKepsekApproveReimbursements(payload) {
       String(row.status) === 'approved_treasurer' &&
       (ids.length === 0 || ids.indexOf(String(row.id)) !== -1)
     ) {
-      if (isTargetPayrollPeriodLockedGas(row.month, row.year)) {
+      var isAdminRoutine = String(row.teacher_id) === ADMIN_ROUTINE_TEACHER_ID;
+      if (!isAdminRoutine && isTargetPayrollPeriodLockedGas(row.month, row.year)) {
         lockedSkipped += 1;
         allItems[i] = Object.assign({}, row, { expense_date: cleanDate ? "'" + cleanDate : '' });
         continue;
@@ -5019,7 +5167,9 @@ function handleBulkKepsekApproveReimbursements(payload) {
       });
       allItems[i] = updatedRow;
       updatedList.push(Object.assign({}, updatedRow, { expense_date: cleanDate }));
-      approvedPeriods.push({ month: row.month, year: row.year });
+      if (!isAdminRoutine) {
+        approvedPeriods.push({ month: row.month, year: row.year });
+      }
     } else if (cleanDate) {
       allItems[i] = Object.assign({}, row, { expense_date: "'" + cleanDate });
     }
@@ -5042,7 +5192,12 @@ function handleBulkKepsekApproveReimbursements(payload) {
   replaceSheetRecords(SHEETS.REIMBURSEMENTS, allItems);
 
   var byTeacher = {};
+  var routineCount = 0;
   updatedList.forEach(function (it) {
+    if (String(it.teacher_id) === ADMIN_ROUTINE_TEACHER_ID) {
+      routineCount += 1;
+      return;
+    }
     var tid = String(it.teacher_id);
     if (!byTeacher[tid]) {
       byTeacher[tid] = { teacher_id: tid, name: it.teacher_name, count: 0, total: 0 };
@@ -5088,13 +5243,21 @@ function handleBulkKepsekApproveReimbursements(payload) {
     }
   });
 
+  var ptkCount = updatedList.length - routineCount;
   createNotificationRecordGas({
     recipient_role: ROLES.ADMIN,
-    title: updatedList.length + ' Belanja Sekolah PTK Disetujui Kepsek',
+    title:
+      ptkCount === 0
+        ? routineCount + ' Belanja Rutin Bendahara Disetujui Kepsek'
+        : updatedList.length + ' Belanja Sekolah Disetujui Kepsek',
     message:
-      'Kepsek telah menyetujui ' +
-      updatedList.length +
-      ' catatan belanja sekolah secara kolektif. Sinkronkan draf penggajian terkait bila diperlukan.',
+      ptkCount === 0
+        ? 'Kepsek telah menyetujui ' +
+          routineCount +
+          ' catatan belanja sekolah rutinan Bendahara secara kolektif.'
+        : 'Kepsek telah menyetujui ' +
+          updatedList.length +
+          ' catatan belanja sekolah secara kolektif. Sinkronkan draf penggajian terkait bila diperlukan.',
     type: 'reimbursement_approved',
     ref_id: updatedList[0].id,
   });

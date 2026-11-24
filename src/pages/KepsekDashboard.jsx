@@ -38,6 +38,7 @@ import FloatingTabBar from '../components/FloatingTabBar';
 import DisbursementApprovalPanel from '../components/DisbursementApprovalPanel';
 import PaginationBar from '../components/admin/PaginationBar';
 import { downloadBatchPayslipsPdf } from '../utils/pdfSlipLoader';
+import { isAdminRoutineReimbursement } from '../utils/reimbursementHelpers';
 
 const ReimbursementApprovalPanel = React.lazy(() =>
   import('../components/ReimbursementApprovalPanel')
@@ -217,6 +218,14 @@ export function KepsekDashboard({
   const pendingKepsekDisbCount = disbursementRequests.filter(
     (r) => r.status === 'approved_treasurer'
   ).length;
+  const ptkReimbursements = useMemo(
+    () => reimbursementRequests.filter((r) => !isAdminRoutineReimbursement(r)),
+    [reimbursementRequests]
+  );
+  const adminRoutineReimbursements = useMemo(
+    () => reimbursementRequests.filter((r) => isAdminRoutineReimbursement(r)),
+    [reimbursementRequests]
+  );
   const pendingKepsekReimbCount = reimbursementRequests.filter(
     (r) => r.status === 'approved_treasurer'
   ).length;
@@ -575,11 +584,20 @@ export function KepsekDashboard({
               </div>
             }
           >
-            <ReimbursementApprovalPanel
-              role="kepsek"
-              items={reimbursementRequests}
-              onRefresh={() => refreshDomains(['reimbursements'])}
-            />
+            <div className="space-y-6">
+              <ReimbursementApprovalPanel
+                role="kepsek"
+                variant="ptk"
+                items={ptkReimbursements}
+                onRefresh={() => refreshDomains(['reimbursements'])}
+              />
+              <ReimbursementApprovalPanel
+                role="kepsek"
+                variant="admin_routine"
+                items={adminRoutineReimbursements}
+                onRefresh={() => refreshDomains(['reimbursements'])}
+              />
+            </div>
           </Suspense>
         ) : (
           <div className="space-y-4">

@@ -27,6 +27,7 @@ import {
   parsePeriodMonthKey,
 } from '../utils/formatters';
 import { computeAttendanceBreakdownFromLogs } from '../utils/attendanceHelpers';
+import { isAdminRoutineReimbursement } from '../utils/reimbursementHelpers';
 import ConfirmModal from '../components/ConfirmModal';
 import FloatingTabBar from '../components/FloatingTabBar';
 import {
@@ -42,6 +43,9 @@ const DisbursementApprovalPanel = React.lazy(() =>
 );
 const ReimbursementApprovalPanel = React.lazy(() =>
   import('../components/ReimbursementApprovalPanel')
+);
+const AdminRoutineReimbursementCard = React.lazy(() =>
+  import('../components/AdminRoutineReimbursementCard')
 );
 const SchoolProfileSection = React.lazy(() => import('../components/SchoolProfileSection'));
 const DataArchiveSection = React.lazy(() => import('../components/admin/DataArchiveSection'));
@@ -92,8 +96,8 @@ const TAB_HEADER_META = {
   },
   reimbursements: {
     eyebrow: 'Penggantian Biaya Sekolah',
-    title: 'Verifikasi Belanja Keperluan Sekolah PTK',
-    desc: 'Periksa catatan belanja sekolah yang ditalangi PTK, sesuaikan nominal atau periode slip bila perlu, lalu teruskan ke Kepsek (Bebas Infaq 2,5%).',
+    title: 'Verifikasi PTK & Belanja Rutinan Bendahara',
+    desc: 'Verifikasi reimbursement belanja PTK (Bebas Infaq 2,5%) serta catat reimbursement belanja sekolah rutinan Bendahara pada kartu terpisah.',
   },
 };
 
@@ -414,9 +418,17 @@ export function AdminDashboard({
     () => disbursementRequests.filter((r) => r.status === 'pending_treasurer').length,
     [disbursementRequests]
   );
-  const pendingReimbursementsCount = useMemo(
-    () => reimbursementRequests.filter((r) => r.status === 'pending_treasurer').length,
+  const ptkReimbursements = useMemo(
+    () => reimbursementRequests.filter((r) => !isAdminRoutineReimbursement(r)),
     [reimbursementRequests]
+  );
+  const adminRoutineReimbursements = useMemo(
+    () => reimbursementRequests.filter((r) => isAdminRoutineReimbursement(r)),
+    [reimbursementRequests]
+  );
+  const pendingReimbursementsCount = useMemo(
+    () => ptkReimbursements.filter((r) => r.status === 'pending_treasurer').length,
+    [ptkReimbursements]
   );
   const outOfSyncDraftsCount = useMemo(
     () => payrolls.filter((p) => p.status === 'draft' && p.needs_resync).length,
@@ -1297,11 +1309,18 @@ export function AdminDashboard({
             )}
 
             {activeTab === 'reimbursements' && (
-              <ReimbursementApprovalPanel
-                role="admin"
-                items={reimbursementRequests}
-                onRefresh={handleRefreshReimbursements}
-              />
+              <div className="space-y-6">
+                <ReimbursementApprovalPanel
+                  role="admin"
+                  variant="ptk"
+                  items={ptkReimbursements}
+                  onRefresh={handleRefreshReimbursements}
+                />
+                <AdminRoutineReimbursementCard
+                  items={adminRoutineReimbursements}
+                  onRefresh={handleRefreshReimbursements}
+                />
+              </div>
             )}
 
             {activeTab === 'school_profile' && (

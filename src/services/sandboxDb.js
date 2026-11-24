@@ -23,6 +23,7 @@ import {
 } from '../utils/attendanceHelpers';
 
 const STORAGE_KEY = 'sipayroll_sheets_sandbox_v1';
+const ADMIN_ROUTINE_TEACHER_ID = 'ADMIN_ROUTINE';
 
 // Deterministic UUIDv4 seeds for relational integrity across the 6 tabs
 const SEED_IDS = {
@@ -1082,6 +1083,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       } else if (snap.reimbursement_ver === undefined) {
         const hasApprovedReimb = (db.Reimbursements || []).some(
           (r) =>
+            r.teacher_id !== ADMIN_ROUTINE_TEACHER_ID &&
             r.status === 'approved' &&
             doesDisbursementMatchPeriod(r.month, r.year, p.month, p.year)
         );
@@ -3282,9 +3284,10 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     }
 
     case 'reimbursements.create': {
-      if (session.role !== 'guru') return forbidden();
-      const own = getOwnedTeacher();
-      if (!own) return forbidden();
+      if (!['guru', 'admin'].includes(session.role)) return forbidden();
+      const isAdminRoutine = session.role === 'admin';
+      const own = isAdminRoutine ? null : getOwnedTeacher();
+      if (!isAdminRoutine && !own) return forbidden();
 
       const expenseDate = String(payload.expense_date || '').trim();
       if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
@@ -3302,7 +3305,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       if (!periodKey || !year || year < 2020 || year > 2100) {
         return { ok: false, status: 400, error: 'Periode bulan/tahun masuk slip gaji tidak valid.' };
       }
-      if (isTargetPayrollPeriodLocked(periodKey, year)) {
+      if (!isAdminRoutine && isTargetPayrollPeriodLocked(periodKey, year)) {
         return {
           ok: false,
           status: 409,
@@ -3325,32 +3328,70 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       }
 
       const nowIso = new Date().toISOString();
+      const actorName =
+        String(session.name || session.teacherName || 'Bendahara / Admin').trim() ||
+        'Bendahara / Admin';
       const newItem = {
         id: generateUuidV4(),
-        teacher_id: own.id,
-        teacher_name: own.name,
-        nip: own.nip,
+        teacher_id: isAdminRoutine ? ADMIN_ROUTINE_TEACHER_ID : own.id,
+        teacher_name: isAdminRoutine ? actorName : own.name,
+        nip: isAdminRoutine ? 'BENDAHARA' : own.nip,
         expense_date: expenseDate,
         month: /^\d+$/.test(periodKey) ? Number(periodKey) : periodKey,
         year,
-        category: String(payload.category || 'lainnya').trim().slice(0, 40) || 'lainnya',
+        category:
+          String(payload.category || (isAdminRoutine ? 'utilitas' : 'lainnya'))
+            .trim()
+            .slice(0, 40) || 'lainnya',
         title,
         receipt_number: String(payload.receipt_number || '').trim().slice(0, 80),
         receipt_url: urlCheck.value,
         note: String(payload.note || '').trim().slice(0, 300),
         amount,
         approved_amount: amount,
-        status: 'pending_treasurer',
-        treasurer_note: '',
+        status: isAdminRoutine ? 'approved_treasurer' : 'pending_treasurer',
+        treasurer_note: isAdminRoutine ? 'Dicatat langsung oleh Bendahara / Admin.' : '',
         kepsek_note: '',
         created_at: nowIso,
         updated_at: nowIso,
-        treasurer_reviewed_at: '',
+        treasurer_reviewed_at: isAdminRoutine ? nowIso : '',
         kepsek_reviewed_at: '',
       };
 
       if (!Array.isArray(db.Reimbursements)) db.Reimbursements = [];
       db.Reimbursements.unshift(newItem);
+
+      if (isAdminRoutine) {
+        const kepsekEmails = (db.Users_Auth || [])
+          .filter((u) => u.role === 'kepsek')
+          .map((u) => String(u.email || u.username || '').trim())
+          .filter((e) => e.includes('@'));
+
+        db.Notifications.unshift({
+          id: generateUuidV4(),
+          recipient_role: 'kepsek',
+          recipient_teacher_id: '',
+          recipient_email: kepsekEmails.join(', '),
+          title: 'Belanja Rutin Bendahara Menunggu Otorisasi',
+          message: `${actorName} mencatat belanja sekolah rutinan "${title}" sebesar Rp ${amount.toLocaleString('id-ID')} untuk periode ${periodKey}/${year}.`,
+          type: 'reimbursement_treasurer_approved',
+          ref_id: newItem.id,
+          is_read: false,
+          created_at: nowIso,
+        });
+
+        bumpVersions(['reimbursements', 'notifications']);
+        saveDb(db);
+        return {
+          ok: true,
+          status: 201,
+          data: {
+            item: newItem,
+            notified_kepsek_emails: kepsekEmails,
+            email_sent: true,
+          },
+        };
+      }
 
       const adminEmails = (db.Users_Auth || [])
         .filter((u) => u.role === 'admin')
@@ -3384,18 +3425,32 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     }
 
     case 'reimbursements.update': {
-      if (session.role !== 'guru') return forbidden();
-      const own = getOwnedTeacher();
-      if (!own) return forbidden();
+      if (!['guru', 'admin'].includes(session.role)) return forbidden();
+      const isAdminRoutine = session.role === 'admin';
+      const own = isAdminRoutine ? null : getOwnedTeacher();
+      if (!isAdminRoutine && !own) return forbidden();
       const target = (db.Reimbursements || []).find((r) => r.id === payload.id);
       if (!target) return notFound();
-      if (target.teacher_id !== own.id) return forbidden();
-      if (target.status !== 'pending_treasurer') {
-        return {
-          ok: false,
-          status: 409,
-          error: 'Hanya catatan yang masih menunggu verifikasi Bendahara yang dapat diubah.',
-        };
+
+      if (isAdminRoutine) {
+        if (target.teacher_id !== ADMIN_ROUTINE_TEACHER_ID) return forbidden();
+        if (target.status !== 'approved_treasurer') {
+          return {
+            ok: false,
+            status: 409,
+            error:
+              'Hanya catatan belanja rutin yang masih menunggu otorisasi Kepala Sekolah yang dapat diubah.',
+          };
+        }
+      } else {
+        if (target.teacher_id !== own.id) return forbidden();
+        if (target.status !== 'pending_treasurer') {
+          return {
+            ok: false,
+            status: 409,
+            error: 'Hanya catatan yang masih menunggu verifikasi Bendahara yang dapat diubah.',
+          };
+        }
       }
 
       const expenseDate = String(payload.expense_date || '').trim();
@@ -3414,7 +3469,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       if (!periodKey || !year || year < 2020 || year > 2100) {
         return { ok: false, status: 400, error: 'Periode bulan/tahun masuk slip gaji tidak valid.' };
       }
-      if (isTargetPayrollPeriodLocked(periodKey, year)) {
+      if (!isAdminRoutine && isTargetPayrollPeriodLocked(periodKey, year)) {
         return {
           ok: false,
           status: 409,
@@ -3454,19 +3509,31 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     }
 
     case 'reimbursements.delete': {
-      if (session.role !== 'guru') return forbidden();
-      const own = getOwnedTeacher();
-      if (!own) return forbidden();
+      if (!['guru', 'admin'].includes(session.role)) return forbidden();
+      const isAdminRoutine = session.role === 'admin';
+      const own = isAdminRoutine ? null : getOwnedTeacher();
+      if (!isAdminRoutine && !own) return forbidden();
       const idx = (db.Reimbursements || []).findIndex((r) => r.id === payload.id);
       if (idx === -1) return notFound();
       const target = db.Reimbursements[idx];
-      if (target.teacher_id !== own.id) return forbidden();
-      if (target.status !== 'pending_treasurer') {
-        return {
-          ok: false,
-          status: 409,
-          error: 'Catatan yang sudah diproses Bendahara/Kepsek tidak dapat dihapus.',
-        };
+      if (isAdminRoutine) {
+        if (target.teacher_id !== ADMIN_ROUTINE_TEACHER_ID) return forbidden();
+        if (target.status !== 'approved_treasurer') {
+          return {
+            ok: false,
+            status: 409,
+            error: 'Catatan belanja rutin yang sudah diotorisasi/ditolak Kepsek tidak dapat dihapus.',
+          };
+        }
+      } else {
+        if (target.teacher_id !== own.id) return forbidden();
+        if (target.status !== 'pending_treasurer') {
+          return {
+            ok: false,
+            status: 409,
+            error: 'Catatan yang sudah diproses Bendahara/Kepsek tidak dapat dihapus.',
+          };
+        }
       }
       db.Reimbursements.splice(idx, 1);
       bumpVersions(['reimbursements']);
@@ -3633,6 +3700,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       const decision = payload.decision === 'reject' ? 'reject' : 'approve';
       const note = String(payload.note || '').trim().slice(0, 240);
       const nowIso = new Date().toISOString();
+      const isAdminRoutine = target.teacher_id === ADMIN_ROUTINE_TEACHER_ID;
 
       if (decision === 'reject') {
         target.status = 'rejected';
@@ -3640,22 +3708,37 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         target.kepsek_reviewed_at = nowIso;
         target.updated_at = nowIso;
 
-        db.Notifications.unshift({
-          id: generateUuidV4(),
-          recipient_role: 'guru',
-          recipient_teacher_id: target.teacher_id,
-          recipient_email: '',
-          title: 'Belanja Sekolah Ditolak Kepsek',
-          message: `Penggantian belanja "${target.title}" periode ${target.month}/${target.year} tidak disetujui Kepala Sekolah.${note ? ` Alasan: ${note}` : ''}`,
-          type: 'reimbursement_rejected',
-          ref_id: target.id,
-          is_read: false,
-          created_at: nowIso,
-        });
+        if (isAdminRoutine) {
+          db.Notifications.unshift({
+            id: generateUuidV4(),
+            recipient_role: 'admin',
+            recipient_teacher_id: '',
+            recipient_email: '',
+            title: 'Belanja Rutin Bendahara Ditolak Kepsek',
+            message: `Belanja sekolah rutinan "${target.title}" periode ${target.month}/${target.year} tidak disetujui Kepala Sekolah.${note ? ` Alasan: ${note}` : ''}`,
+            type: 'reimbursement_rejected',
+            ref_id: target.id,
+            is_read: false,
+            created_at: nowIso,
+          });
+        } else {
+          db.Notifications.unshift({
+            id: generateUuidV4(),
+            recipient_role: 'guru',
+            recipient_teacher_id: target.teacher_id,
+            recipient_email: '',
+            title: 'Belanja Sekolah Ditolak Kepsek',
+            message: `Penggantian belanja "${target.title}" periode ${target.month}/${target.year} tidak disetujui Kepala Sekolah.${note ? ` Alasan: ${note}` : ''}`,
+            type: 'reimbursement_rejected',
+            ref_id: target.id,
+            is_read: false,
+            created_at: nowIso,
+          });
+        }
 
         bumpVersions(['reimbursements', 'notifications']);
       } else {
-        if (isTargetPayrollPeriodLocked(target.month, target.year)) {
+        if (!isAdminRoutine && isTargetPayrollPeriodLocked(target.month, target.year)) {
           return {
             ok: false,
             status: 409,
@@ -3669,39 +3752,55 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         target.kepsek_reviewed_at = nowIso;
         target.updated_at = nowIso;
 
-        db.Notifications.unshift(
-          {
-            id: generateUuidV4(),
-            recipient_role: 'guru',
-            recipient_teacher_id: target.teacher_id,
-            recipient_email: '',
-            title: 'Penggantian Belanja Sekolah Disetujui!',
-            message: `Belanja "${target.title}" sebesar Rp ${approvedAmt.toLocaleString('id-ID')} disetujui Kepsek dan masuk slip gaji ${target.month}/${target.year} (Bebas Infaq 2,5%).`,
-            type: 'reimbursement_approved',
-            ref_id: target.id,
-            is_read: false,
-            created_at: nowIso,
-          },
-          {
+        if (isAdminRoutine) {
+          db.Notifications.unshift({
             id: generateUuidV4(),
             recipient_role: 'admin',
             recipient_teacher_id: '',
             recipient_email: '',
-            title: `Belanja Sekolah Disetujui: ${target.teacher_name}`,
-            message: `Kepsek menyetujui penggantian belanja "${target.title}" (${target.teacher_name}) sebesar Rp ${approvedAmt.toLocaleString('id-ID')} untuk slip ${target.month}/${target.year}.`,
+            title: 'Belanja Rutin Bendahara Disetujui Kepsek!',
+            message: `Pengeluaran rutin "${target.title}" sebesar Rp ${approvedAmt.toLocaleString('id-ID')} (periode ${target.month}/${target.year}) telah disetujui Kepala Sekolah.`,
             type: 'reimbursement_approved',
             ref_id: target.id,
             is_read: false,
             created_at: nowIso,
-          }
-        );
+          });
+          bumpVersions(['reimbursements', 'notifications']);
+        } else {
+          db.Notifications.unshift(
+            {
+              id: generateUuidV4(),
+              recipient_role: 'guru',
+              recipient_teacher_id: target.teacher_id,
+              recipient_email: '',
+              title: 'Penggantian Belanja Sekolah Disetujui!',
+              message: `Belanja "${target.title}" sebesar Rp ${approvedAmt.toLocaleString('id-ID')} disetujui Kepsek dan masuk slip gaji ${target.month}/${target.year} (Bebas Infaq 2,5%).`,
+              type: 'reimbursement_approved',
+              ref_id: target.id,
+              is_read: false,
+              created_at: nowIso,
+            },
+            {
+              id: generateUuidV4(),
+              recipient_role: 'admin',
+              recipient_teacher_id: '',
+              recipient_email: '',
+              title: `Belanja Sekolah Disetujui: ${target.teacher_name}`,
+              message: `Kepsek menyetujui penggantian belanja "${target.title}" (${target.teacher_name}) sebesar Rp ${approvedAmt.toLocaleString('id-ID')} untuk slip ${target.month}/${target.year}.`,
+              type: 'reimbursement_approved',
+              ref_id: target.id,
+              is_read: false,
+              created_at: nowIso,
+            }
+          );
 
-        bumpVersions(
-          ['reimbursements', 'notifications'],
-          [],
-          [],
-          [{ month: target.month, year: target.year }]
-        );
+          bumpVersions(
+            ['reimbursements', 'notifications'],
+            [],
+            [],
+            [{ month: target.month, year: target.year }]
+          );
+        }
       }
 
       saveDb(db);
@@ -3719,7 +3818,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
       (db.Reimbursements || []).forEach((target) => {
         if (target.status === 'approved_treasurer' && (ids.length === 0 || ids.includes(target.id))) {
-          if (isTargetPayrollPeriodLocked(target.month, target.year)) {
+          const isAdminRoutine = target.teacher_id === ADMIN_ROUTINE_TEACHER_ID;
+          if (!isAdminRoutine && isTargetPayrollPeriodLocked(target.month, target.year)) {
             lockedSkipped += 1;
             return;
           }
@@ -3730,7 +3830,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           target.kepsek_reviewed_at = nowIso;
           target.updated_at = nowIso;
           updatedList.push(target);
-          approvedPeriods.push({ month: target.month, year: target.year });
+          if (!isAdminRoutine) {
+            approvedPeriods.push({ month: target.month, year: target.year });
+          }
         }
       });
 
@@ -3751,7 +3853,12 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       }
 
       const byTeacher = new Map();
+      let routineCount = 0;
       updatedList.forEach((it) => {
+        if (it.teacher_id === ADMIN_ROUTINE_TEACHER_ID) {
+          routineCount += 1;
+          return;
+        }
         const cur = byTeacher.get(it.teacher_id) || {
           teacher_id: it.teacher_id,
           name: it.teacher_name,
@@ -3778,13 +3885,20 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         });
       });
 
+      const ptkCount = updatedList.length - routineCount;
       db.Notifications.unshift({
         id: generateUuidV4(),
         recipient_role: 'admin',
         recipient_teacher_id: '',
         recipient_email: '',
-        title: `${updatedList.length} Belanja Sekolah PTK Disetujui Kepsek`,
-        message: `Kepsek telah menyetujui ${updatedList.length} catatan belanja sekolah secara kolektif. Sinkronkan draf penggajian terkait bila diperlukan.`,
+        title:
+          ptkCount === 0
+            ? `${routineCount} Belanja Rutin Bendahara Disetujui Kepsek`
+            : `${updatedList.length} Belanja Sekolah Disetujui Kepsek`,
+        message:
+          ptkCount === 0
+            ? `Kepsek telah menyetujui ${routineCount} catatan belanja sekolah rutinan Bendahara secara kolektif.`
+            : `Kepsek telah menyetujui ${updatedList.length} catatan belanja sekolah secara kolektif. Sinkronkan draf penggajian terkait bila diperlukan.`,
         type: 'reimbursement_approved',
         ref_id: updatedList[0].id,
         is_read: false,
