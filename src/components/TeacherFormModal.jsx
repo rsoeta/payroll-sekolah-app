@@ -1,5 +1,5 @@
 import React from 'react';
-import { Mail, Plus, Trash2, X } from 'lucide-react';
+import { Mail, Plus, Trash2, UserCog, X } from 'lucide-react';
 import {
   STAFF_CATEGORIES,
   formatRibuan,
@@ -222,6 +222,49 @@ export function TeacherFormModal({
                     className="nim-input flex-1 !min-h-[32px] !py-1 text-xs"
                   />
                 </div>
+
+                {/* Designated TU Proxy / Companion Toggle */}
+                <label
+                  htmlFor="teacher-tu-operator-checkbox"
+                  className="flex items-start gap-2.5 rounded-xl p-2.5 cursor-pointer select-none transition-colors"
+                  style={{
+                    background: teacherForm.is_tu_operator
+                      ? 'var(--good-soft)'
+                      : 'var(--card-2)',
+                    boxShadow: teacherForm.is_tu_operator
+                      ? 'inset 0 0 0 1px var(--good-line)'
+                      : 'inset 0 0 0 1px var(--line)',
+                  }}
+                >
+                  <input
+                    id="teacher-tu-operator-checkbox"
+                    type="checkbox"
+                    checked={Boolean(teacherForm.is_tu_operator)}
+                    onChange={(e) =>
+                      setTeacherForm({
+                        ...teacherForm,
+                        is_tu_operator: e.target.checked,
+                      })
+                    }
+                    className="mt-0.5 h-4 w-4 rounded accent-emerald-600 shrink-0"
+                  />
+                  <div className="min-w-0 flex-1 space-y-0.5">
+                    <span className="flex items-center gap-1.5 text-[11.5px] font-bold text-[var(--ink)]">
+                      <UserCog className="h-3.5 w-3.5 text-[var(--accent-text)] shrink-0" />
+                      <span>Tunjuk sebagai TU Pendamping PTK</span>
+                    </span>
+                    <span className="block text-[10.5px] leading-snug text-[var(--muted)]">
+                      Akun ini dapat berpindah ke profil seluruh PTK aktif untuk membantu
+                      mengisi Kehadiran &amp; JTM, Pengajuan Pencairan, Belanja Sekolah, serta
+                      mengunduh Slip Gaji (tetap diverifikasi Bendahara &amp; Kepala Sekolah).
+                    </span>
+                    {Boolean(teacherForm.is_tu_operator) && !String(teacherForm.email || '').trim() && (
+                      <span className="block text-[10.5px] font-semibold text-[var(--warn-text)] pt-0.5">
+                        Isi Akun Google Portal di atas agar staf TU dapat masuk menggunakan akunnya.
+                      </span>
+                    )}
+                  </div>
+                </label>
               </div>
 
               {/* Base Salary Components Card */}

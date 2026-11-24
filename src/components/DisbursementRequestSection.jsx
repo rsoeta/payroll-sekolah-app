@@ -34,6 +34,8 @@ import { downloadPayslipPdf } from '../utils/pdfSlipLoader';
 
 export function DisbursementRequestSection({
   teacherProfile,
+  targetTeacherId = '',
+  assistingMeta = null,
   initialPeriod,
   initialEstimates,
   initialRequests,
@@ -79,9 +81,14 @@ export function DisbursementRequestSection({
     async ({ silent = false } = {}) => {
       if (!silent) setLoading(true);
       try {
+        const targetParam = targetTeacherId ? { target_teacher_id: targetTeacherId } : {};
         const [estList, reqList] = await Promise.all([
-          api.get('disbursements.estimates', { month: selectedMonth, year: selectedYear }),
-          api.get('disbursements.list'),
+          api.get('disbursements.estimates', {
+            month: selectedMonth,
+            year: selectedYear,
+            ...targetParam,
+          }),
+          api.get('disbursements.list', targetParam),
         ]);
         const validEstimates = Array.isArray(estList) ? estList : [];
         const validReqs = Array.isArray(reqList) ? reqList : [];
@@ -97,7 +104,7 @@ export function DisbursementRequestSection({
         if (!silent) setLoading(false);
       }
     },
-    [selectedMonth, selectedYear]
+    [selectedMonth, selectedYear, targetTeacherId]
   );
 
   useEffect(() => {
@@ -186,6 +193,7 @@ export function DisbursementRequestSection({
         disbursement_timing: disbursementTiming,
         requested_amount: finalAmt,
         reason,
+        ...(targetTeacherId ? { target_teacher_id: targetTeacherId } : {}),
       });
 
       const emails = res?.notified_admin_emails || [];
@@ -248,6 +256,11 @@ export function DisbursementRequestSection({
               <h2 className="text-base font-bold text-[var(--ink)]">
                 Ajukan Pencairan Estimasi Gaji
               </h2>
+              {assistingMeta?.isAssistingOther && (
+                <span className="nim-badge nim-badge--warn mt-1">
+                  Mengajukan atas nama: {assistingMeta.targetTeacherName}
+                </span>
+              )}
               <p className="text-xs text-[var(--muted)]">
                 Pilih pencairan sebagian/seluruh estimasi, baik sebelum waktunya maupun tepat waktu
                 secara kolektif.
@@ -590,6 +603,11 @@ export function DisbursementRequestSection({
                               </span>
                               <span className="nim-badge !text-[10px]">{scopeMeta.shortLabel}</span>
                               <span className="nim-badge !text-[10px]">{timingMeta.shortLabel}</span>
+                              {req.assisted_by_name && (
+                                <span className="nim-badge nim-badge--accent !text-[10px]">
+                                  Diinput oleh TU: {req.assisted_by_name}
+                                </span>
+                              )}
                             </div>
                             <p className="mt-1 text-[10.5px] text-[var(--muted)]">
                               Diajukan: {formatIsoDateTimeIndo(req.created_at)}

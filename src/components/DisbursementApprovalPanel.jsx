@@ -60,9 +60,9 @@ export function DisbursementApprovalPanel({
     return requests.filter((r) => {
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (!q) return true;
-      const hay = `${r.teacher_name || ''} ${r.nip || ''} ${r.reason || ''} ${getMonthName(
-        r.month
-      )} ${r.year}`.toLowerCase();
+      const hay = `${r.teacher_name || ''} ${r.nip || ''} ${r.reason || ''} ${
+        r.assisted_by_name || ''
+      } ${getMonthName(r.month)} ${r.year}`.toLowerCase();
       return hay.includes(q);
     });
   }, [requests, statusFilter, searchQuery]);
@@ -317,6 +317,11 @@ export function DisbursementApprovalPanel({
                           >
                             {timingMeta.shortLabel}
                           </span>
+                          {req.assisted_by_name && (
+                            <span className="nim-badge nim-badge--accent !text-[10.5px]">
+                              Diinput oleh TU: {req.assisted_by_name}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <span className={stMeta.cls}>{stMeta.shortLabel}</span>

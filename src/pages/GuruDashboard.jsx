@@ -11,6 +11,7 @@ import {
   Calendar,
   CalendarCheck,
   Mail,
+  Users,
 } from 'lucide-react';
 import api, { isActionUnsupported, markActionUnsupported } from '../services/gasApi';
 import {
@@ -40,6 +41,7 @@ import FloatingTabBar from '../components/FloatingTabBar';
 import GuruSelfAttendanceSection from '../components/GuruSelfAttendanceSection';
 import DisbursementRequestSection from '../components/DisbursementRequestSection';
 import GuruReimbursementSection from '../components/GuruReimbursementSection';
+import TuTeacherSwitcherBar from '../components/TuTeacherSwitcherBar';
 
 const SLIP_STATUS_META = {
   draft: {
@@ -97,11 +99,42 @@ export function GuruDashboard({
   const [prefetchedData, setPrefetchedData] = useState(null);
   const [loading, setLoading] = useState(false);
 
+  const [isTuOperator, setIsTuOperator] = useState(() => Boolean(user?.isTuOperator));
+  const [assistableTeachers, setAssistableTeachers] = useState([]);
+  const [actingTeacherId, setActingTeacherId] = useState('');
+  const [ownMeta, setOwnMeta] = useState(() => ({
+    id: user?.teacherId ? String(user.teacherId) : '',
+    name: user?.name ? String(user.name) : '',
+  }));
+
+  useEffect(() => {
+    setIsTuOperator(Boolean(user?.isTuOperator));
+    setActingTeacherId('');
+    setDisbursementTargetPeriod(null);
+    setOwnMeta({
+      id: user?.teacherId ? String(user.teacherId) : '',
+      name: user?.name ? String(user.name) : '',
+    });
+  }, [user?.id, user?.teacherId, user?.name, user?.isTuOperator]);
+
+  const isAssistingOther = Boolean(
+    isTuOperator &&
+      actingTeacherId &&
+      String(actingTeacherId) !== String(ownMeta.id || '')
+  );
+  const activeTargetTeacherId = isAssistingOther ? actingTeacherId : '';
+
   const defaultPeriodRef = useRef(null);
   if (!defaultPeriodRef.current) {
     const now = new Date();
     defaultPeriodRef.current = { month: now.getMonth() + 1, year: now.getFullYear() };
   }
+
+  const handleSelectActingTeacher = useCallback((nextId) => {
+    setDisbursementTargetPeriod(null);
+    setPrefetchedData(null);
+    setActingTeacherId(nextId ? String(nextId) : '');
+  }, []);
 
   const applyDisbursementsCount = useCallback((disbList) => {
     const valid = Array.isArray(disbList) ? disbList : [];
@@ -123,12 +156,35 @@ export function GuruDashboard({
   const loadGuruData = useCallback(async () => {
     setLoading(true);
     const curPeriod = defaultPeriodRef.current;
+    const targetParam = activeTargetTeacherId
+      ? { target_teacher_id: activeTargetTeacherId }
+      : {};
     try {
       let loaded = false;
       if (!isActionUnsupported('bootstrap.guru')) {
         try {
-          const bundle = await api.get('bootstrap.guru', curPeriod);
+          const bundle = await api.get('bootstrap.guru', {
+            ...curPeriod,
+            ...targetParam,
+          });
           if (bundle && typeof bundle === 'object') {
+            const liveTuFlag = Boolean(bundle.isTuOperator ?? bundle.summary?.isTuOperator);
+            const liveOwnId = String(
+              bundle.ownTeacherId || bundle.summary?.ownTeacherId || user?.teacherId || ''
+            );
+            const liveOwnName = String(
+              bundle.ownTeacherName || bundle.summary?.ownTeacherName || user?.name || ''
+            );
+            setIsTuOperator(liveTuFlag);
+            setOwnMeta({ id: liveOwnId, name: liveOwnName });
+            setAssistableTeachers(
+              liveTuFlag && Array.isArray(bundle.assistableTeachers)
+                ? bundle.assistableTeachers
+                : []
+            );
+            if (!liveTuFlag && activeTargetTeacherId) {
+              setActingTeacherId('');
+            }
             setSummary(bundle.summary || null);
             setSlips(bundle.slips || []);
             const logsArr = Array.isArray(bundle.attendanceLogs) ? bundle.attendanceLogs : [];
@@ -136,8 +192,16 @@ export function GuruDashboard({
             const disbArr = applyDisbursementsCount(bundle.disbursements);
             const reimbArr = applyReimbursementsCount(bundle.reimbursements);
             const estArr = Array.isArray(bundle.estimates) ? bundle.estimates : [];
+            const resolvedActiveId = String(
+              bundle.activeTeacherId ||
+                activeTargetTeacherId ||
+                liveOwnId ||
+                bundle.summary?.teacher?.id ||
+                ''
+            );
             setAttendanceLogCount(logsArr.length);
             setPrefetchedData({
+              teacherId: resolvedActiveId,
               period: curPeriod,
               attendanceLogs: logsArr,
               attendanceSummary: attArr.length > 0 ? attArr[0] : null,
@@ -165,12 +229,26 @@ export function GuruDashboard({
 
       if (!loaded) {
         const [sumData, mySlips, myLogs, myDisbReqs, myReimbs] = await Promise.all([
-          api.get('dashboard.summary'),
-          api.get('payslips.myList'),
-          api.get('attendanceLogs.list', curPeriod).catch(() => []),
-          api.get('disbursements.list').catch(() => []),
-          api.get('reimbursements.list').catch(() => []),
+          api.get('dashboard.summary', targetParam),
+          api.get('payslips.myList', targetParam),
+          api.get('attendanceLogs.list', { ...curPeriod, ...targetParam }).catch(() => []),
+          api.get('disbursements.list', targetParam).catch(() => []),
+          api.get('reimbursements.list', targetParam).catch(() => []),
         ]);
+        const liveTuFlag = Boolean(sumData?.isTuOperator);
+        const liveOwnId = String(sumData?.ownTeacherId || user?.teacherId || '');
+        const liveOwnName = String(sumData?.ownTeacherName || user?.name || '');
+        setIsTuOperator(liveTuFlag);
+        setOwnMeta({ id: liveOwnId, name: liveOwnName });
+        if (liveTuFlag) {
+          const tList = await api.get('teachers.list').catch(() => []);
+          setAssistableTeachers(Array.isArray(tList) ? tList : []);
+        } else {
+          setAssistableTeachers([]);
+          if (activeTargetTeacherId) {
+            setActingTeacherId('');
+          }
+        }
         const logsArr = Array.isArray(myLogs) ? myLogs : [];
         const disbArr = applyDisbursementsCount(myDisbReqs);
         const reimbArr = applyReimbursementsCount(myReimbs);
@@ -178,6 +256,9 @@ export function GuruDashboard({
         setSlips(mySlips || []);
         setAttendanceLogCount(logsArr.length);
         setPrefetchedData({
+          teacherId: String(
+            activeTargetTeacherId || liveOwnId || sumData?.teacher?.id || ''
+          ),
           period: curPeriod,
           attendanceLogs: logsArr,
           attendanceSummary: null,
@@ -187,16 +268,32 @@ export function GuruDashboard({
         });
       }
     } catch (err) {
-      notify.error(err.message || 'Gagal memuat slip gaji.');
+      if (Number(err?.status) === 403 && activeTargetTeacherId) {
+        setActingTeacherId('');
+        setIsTuOperator(false);
+        setAssistableTeachers([]);
+        notify.warn('Mandat TU Pendamping PTK tidak aktif. Dikembalikan ke akun pribadi.');
+      } else {
+        notify.error(err.message || 'Gagal memuat slip gaji.');
+      }
     } finally {
       setLoading(false);
     }
-  }, [applyDisbursementsCount, applyReimbursementsCount]);
+  }, [
+    activeTargetTeacherId,
+    user?.teacherId,
+    user?.name,
+    applyDisbursementsCount,
+    applyReimbursementsCount,
+  ]);
 
   const refreshDomains = useCallback(
     async (domains = []) => {
       const domainSet = new Set(domains);
       const curPeriod = defaultPeriodRef.current;
+      const targetParam = activeTargetTeacherId
+        ? { target_teacher_id: activeTargetTeacherId }
+        : {};
       try {
         const tasks = [];
         if (
@@ -206,8 +303,25 @@ export function GuruDashboard({
           domainSet.has('reimbursements')
         ) {
           tasks.push(
-            api.get('dashboard.summary').then((sumData) => {
+            api.get('dashboard.summary', targetParam).then((sumData) => {
               setSummary(sumData);
+              if (sumData && sumData.isTuOperator !== undefined) {
+                const liveTu = Boolean(sumData.isTuOperator);
+                setIsTuOperator(liveTu);
+                if (!liveTu) {
+                  setAssistableTeachers([]);
+                  if (activeTargetTeacherId) {
+                    setActingTeacherId('');
+                  }
+                } else if (domainSet.has('teachers')) {
+                  api
+                    .get('teachers.list')
+                    .then((tList) => {
+                      if (Array.isArray(tList)) setAssistableTeachers(tList);
+                    })
+                    .catch(() => {});
+                }
+              }
             })
           );
         }
@@ -217,7 +331,7 @@ export function GuruDashboard({
           domainSet.has('reimbursements')
         ) {
           tasks.push(
-            api.get('payslips.myList').then((mySlips) => {
+            api.get('payslips.myList', targetParam).then((mySlips) => {
               setSlips(mySlips || []);
             })
           );
@@ -225,7 +339,7 @@ export function GuruDashboard({
         if (domainSet.has('disbursements')) {
           tasks.push(
             api
-              .get('disbursements.list')
+              .get('disbursements.list', targetParam)
               .catch(() => [])
               .then((disbList) => {
                 const valid = applyDisbursementsCount(disbList);
@@ -238,7 +352,7 @@ export function GuruDashboard({
         if (domainSet.has('reimbursements')) {
           tasks.push(
             api
-              .get('reimbursements.list')
+              .get('reimbursements.list', targetParam)
               .catch(() => [])
               .then((reimbList) => {
                 const valid = applyReimbursementsCount(reimbList);
@@ -251,7 +365,7 @@ export function GuruDashboard({
         if (domainSet.has('attendances')) {
           tasks.push(
             api
-              .get('attendanceLogs.list', curPeriod)
+              .get('attendanceLogs.list', { ...curPeriod, ...targetParam })
               .catch(() => [])
               .then((myLogs) => {
                 const logsArr = Array.isArray(myLogs) ? myLogs : [];
@@ -265,11 +379,15 @@ export function GuruDashboard({
         if (tasks.length > 0) {
           await Promise.all(tasks);
         }
-      } catch {
-        // Silent background refresh
+      } catch (err) {
+        if (Number(err?.status) === 403 && activeTargetTeacherId) {
+          setActingTeacherId('');
+          setIsTuOperator(false);
+          setAssistableTeachers([]);
+        }
       }
     },
-    [applyDisbursementsCount, applyReimbursementsCount]
+    [activeTargetTeacherId, applyDisbursementsCount, applyReimbursementsCount]
   );
 
   useEffect(() => {
@@ -386,8 +504,29 @@ export function GuruDashboard({
           downloadPayslipPdf(slip);
         },
       })),
+      ...(isTuOperator
+        ? assistableTeachers.map((t) => ({
+            id: `tu-switch:${t.id}`,
+            group: 'Bantu PTK (Mode TU)',
+            title:
+              String(t.id) === String(ownMeta.id)
+                ? `Akun Saya — ${t.name}`
+                : `Bantu: ${t.name}`,
+            sub: `NIP: ${t.nip || '-'} • ${t.status || getStaffCategoryLabel(t)}`,
+            icon: Users,
+            run: () => handleSelectActingTeacher(t.id),
+          }))
+        : []),
     ]);
-  }, [slips, onSearchItemsChange, setActiveTab]);
+  }, [
+    slips,
+    isTuOperator,
+    assistableTeachers,
+    ownMeta.id,
+    handleSelectActingTeacher,
+    onSearchItemsChange,
+    setActiveTab,
+  ]);
 
   const handleDownloadPdf = async (slip) => {
     await downloadPayslipPdf(slip);
@@ -400,6 +539,20 @@ export function GuruDashboard({
   };
 
   const teacherProfile = summary?.teacher || {};
+  const expectedPrefetchTeacherId = String(
+    activeTargetTeacherId || ownMeta.id || teacherProfile?.id || ''
+  );
+  const matchingPrefetchedData =
+    prefetchedData &&
+    expectedPrefetchTeacherId &&
+    String(prefetchedData.teacherId || '') === expectedPrefetchTeacherId
+      ? prefetchedData
+      : null;
+  const assistingMeta = {
+    isAssistingOther,
+    assistedByName: ownMeta.name || user.name || 'Staf TU',
+    targetTeacherName: teacherProfile.name || '',
+  };
   const latestEstimateSlip = slips.find(
     (s) =>
       s.slip_type !== 'disbursement' &&
@@ -434,6 +587,18 @@ export function GuruDashboard({
 
   return (
     <main className="space-y-6">
+      {isTuOperator && (
+        <TuTeacherSwitcherBar
+          ownTeacherId={ownMeta.id || user?.teacherId || ''}
+          ownTeacherName={ownMeta.name || user?.name || ''}
+          activeTeacherId={activeTargetTeacherId}
+          activeTeacherProfile={teacherProfile}
+          teachers={assistableTeachers}
+          loading={loading}
+          onSelectTeacher={handleSelectActingTeacher}
+        />
+      )}
+
       {/* Page Header */}
       <div className="nim-phead">
         <div>
@@ -616,10 +781,13 @@ export function GuruDashboard({
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
         >
           <DisbursementRequestSection
+            key={`disb-${activeTargetTeacherId || ownMeta.id || 'self'}`}
             teacherProfile={teacherProfile}
-            initialPeriod={disbursementTargetPeriod || prefetchedData?.period}
-            initialEstimates={prefetchedData?.estimates}
-            initialRequests={prefetchedData?.disbursements}
+            targetTeacherId={activeTargetTeacherId}
+            assistingMeta={assistingMeta}
+            initialPeriod={disbursementTargetPeriod || matchingPrefetchedData?.period}
+            initialEstimates={matchingPrefetchedData?.estimates}
+            initialRequests={matchingPrefetchedData?.disbursements}
             onDisbursementChange={handleDisbursementSectionChange}
           />
         </motion.section>
@@ -634,9 +802,12 @@ export function GuruDashboard({
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
         >
           <GuruReimbursementSection
+            key={`reimb-${activeTargetTeacherId || ownMeta.id || 'self'}`}
             teacherProfile={teacherProfile}
-            initialPeriod={prefetchedData?.period}
-            initialItems={prefetchedData?.reimbursements}
+            targetTeacherId={activeTargetTeacherId}
+            assistingMeta={assistingMeta}
+            initialPeriod={matchingPrefetchedData?.period}
+            initialItems={matchingPrefetchedData?.reimbursements}
             onReimbursementsChange={handleReimbursementSectionChange}
           />
         </motion.section>
@@ -651,10 +822,13 @@ export function GuruDashboard({
           transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
         >
           <GuruSelfAttendanceSection
+            key={`att-${activeTargetTeacherId || ownMeta.id || 'self'}`}
             teacherProfile={teacherProfile}
-            initialPeriod={prefetchedData?.period}
-            initialLogs={prefetchedData?.attendanceLogs}
-            initialAttendanceSummary={prefetchedData?.attendanceSummary}
+            targetTeacherId={activeTargetTeacherId}
+            assistingMeta={assistingMeta}
+            initialPeriod={matchingPrefetchedData?.period}
+            initialLogs={matchingPrefetchedData?.attendanceLogs}
+            initialAttendanceSummary={matchingPrefetchedData?.attendanceSummary}
             onLogsCountChange={setAttendanceLogCount}
             onSyncComplete={handleAttendanceSectionSync}
           />

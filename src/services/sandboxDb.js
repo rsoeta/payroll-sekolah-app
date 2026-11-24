@@ -25,6 +25,12 @@ import {
 const STORAGE_KEY = 'sipayroll_sheets_sandbox_v1';
 const ADMIN_ROUTINE_TEACHER_ID = 'ADMIN_ROUTINE';
 
+function isTuOperatorFlag(val) {
+  if (val === true || val === 1) return true;
+  const s = String(val || '').trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'ya';
+}
+
 // Deterministic UUIDv4 seeds for relational integrity across the 6 tabs
 const SEED_IDS = {
   userAdmin: '11111111-2222-4333-8444-555555550001',
@@ -108,6 +114,7 @@ async function buildInitialDatabase() {
       status: 'GTY (Guru Tetap Yayasan)',
       bank_account: 'BSI 7149283741',
       email: 'budi.santoso@gmail.com',
+      is_tu_operator: false,
     },
     {
       id: SEED_IDS.teacher2,
@@ -118,6 +125,7 @@ async function buildInitialDatabase() {
       status: 'GTY (Guru Tetap Yayasan)',
       bank_account: 'BSI 7283910492',
       email: 'siti.aisyah@gmail.com',
+      is_tu_operator: false,
     },
     {
       id: SEED_IDS.teacher3,
@@ -125,9 +133,10 @@ async function buildInitialDatabase() {
       nip: '19951104202101',
       name: 'Rizky Pratama, S.Kom.',
       staff_category: 'kependidikan',
-      status: 'Laboran & Teknisi Sumber Belajar',
+      status: 'Tenaga Administrasi / Staf TU',
       bank_account: 'Mandiri 137001928371',
       email: 'rizky.pratama@gmail.com',
+      is_tu_operator: true,
     },
   ];
 
@@ -463,6 +472,10 @@ function upgradeLegacyDbToGmail(db) {
           modified = true;
         }
       }
+      if (t.is_tu_operator === undefined) {
+        t.is_tu_operator = t.id === SEED_IDS.teacher3;
+        modified = true;
+      }
     });
   }
 
@@ -643,6 +656,10 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         ? 'Kepala Sekolah'
         : rawEmail);
 
+    const isTuOperator = Boolean(
+      linkedTeacher && isTuOperatorFlag(linkedTeacher.is_tu_operator)
+    );
+
     const sessionPayload = {
       userId: user.id,
       username: rawEmail,
@@ -650,6 +667,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       role: user.role,
       teacherId: linkedTeacher ? linkedTeacher.id : null,
       teacherName: displayName,
+      isTuOperator,
       picture: oauthProfile.picture || '',
       exp: Math.floor(Date.now() / 1000) + 3600 * 8,
     };
@@ -668,6 +686,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           email: sessionPayload.email,
           role: sessionPayload.role,
           teacherId: sessionPayload.teacherId,
+          isTuOperator: sessionPayload.isTuOperator,
           name: sessionPayload.teacherName,
           picture: sessionPayload.picture,
         },
@@ -709,7 +728,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     error: '404 Not Found: Resource tidak ditemukan.',
   });
 
-  // Helper for Guru Object-Level Ownership
+  // Helper for Guru Object-Level Ownership & Live TU Proxy Resolution
   const getOwnedTeacher = () => {
     const foundById = db.Teachers.find((t) => t.user_id === session.userId);
     if (foundById) return foundById;
@@ -718,6 +737,60 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       ? db.Teachers.find((t) => String(t.email || '').toLowerCase() === sessEmail) || null
       : null;
   };
+
+  const resolveGuruTargetContext = (reqPayload = {}) => {
+    const ownTeacher = getOwnedTeacher();
+    if (!ownTeacher) return { ok: false, response: forbidden() };
+    const isTuOperator = isTuOperatorFlag(ownTeacher.is_tu_operator);
+    const reqTargetId = String(
+      reqPayload?.target_teacher_id || reqPayload?.acting_teacher_id || ''
+    ).trim();
+    if (!reqTargetId || reqTargetId === String(ownTeacher.id)) {
+      return {
+        ok: true,
+        ownTeacher,
+        targetTeacher: ownTeacher,
+        isTuOperator,
+        isAssistingOther: false,
+        assistedByName: '',
+      };
+    }
+    if (!isTuOperator) {
+      return {
+        ok: false,
+        response: {
+          ok: false,
+          status: 403,
+          error: '403 Forbidden: Akun Anda tidak ditunjuk sebagai TU Pendamping PTK.',
+        },
+      };
+    }
+    const targetTeacher = db.Teachers.find((t) => String(t.id) === reqTargetId);
+    if (!targetTeacher) {
+      return { ok: false, response: notFound() };
+    }
+    return {
+      ok: true,
+      ownTeacher,
+      targetTeacher,
+      isTuOperator: true,
+      isAssistingOther: true,
+      assistedByName: String(ownTeacher.name || session.teacherName || 'Staf TU').trim(),
+    };
+  };
+
+  const buildAssistableTeachersList = () =>
+    [...(db.Teachers || [])]
+      .map((t) => ({
+        id: t.id,
+        nip: t.nip || '',
+        name: t.name || '',
+        staff_category: resolveStaffCategory(t),
+        status: t.status || '',
+        email: t.email || '',
+        is_tu_operator: isTuOperatorFlag(t.is_tu_operator),
+      }))
+      .sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'id'));
 
   const doesDisbursementMatchPeriod = (disbMonth, disbYear, targetMonthKey, targetYear) => {
     if (Number(disbYear) !== Number(targetYear)) return false;
@@ -1165,17 +1238,22 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
       case 'bootstrap.guru': {
         if (session.role !== 'guru') return forbidden();
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+
         const now = new Date();
         const periodQuery = {
           month: payload.month || now.getMonth() + 1,
           year: payload.year || now.getFullYear(),
+          ...(ctx.isAssistingOther ? { target_teacher_id: ctx.targetTeacher.id } : {}),
         };
-        const sumRes = dispatchAction('dashboard.summary', {});
-        const slipsRes = dispatchAction('payslips.myList', {});
+        const targetOnly = ctx.isAssistingOther ? { target_teacher_id: ctx.targetTeacher.id } : {};
+        const sumRes = dispatchAction('dashboard.summary', targetOnly);
+        const slipsRes = dispatchAction('payslips.myList', targetOnly);
         const logsRes = dispatchAction('attendanceLogs.list', periodQuery);
         const attRes = dispatchAction('attendances.list', periodQuery);
-        const disbRes = dispatchAction('disbursements.list', {});
-        const reimbRes = dispatchAction('reimbursements.list', {});
+        const disbRes = dispatchAction('disbursements.list', targetOnly);
+        const reimbRes = dispatchAction('reimbursements.list', targetOnly);
         const estRes = dispatchAction('disbursements.estimates', periodQuery);
         const notifRes = dispatchAction('notifications.list', {});
         return {
@@ -1192,28 +1270,35 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             notifications: notifRes.data || { items: [], unreadCount: 0 },
             schoolProfile: db.School_Profile || null,
             versions: { ...ensureSyncMeta().versions },
+            isTuOperator: ctx.isTuOperator,
+            isAssistingOther: ctx.isAssistingOther,
+            ownTeacherId: ctx.ownTeacher.id,
+            ownTeacherName: ctx.ownTeacher.name,
+            activeTeacherId: ctx.targetTeacher.id,
+            assistableTeachers: ctx.isTuOperator ? buildAssistableTeachersList() : [],
           },
         };
       }
 
     case 'dashboard.summary': {
       if (session.role === 'guru') {
-        const own = getOwnedTeacher();
-        if (!own) return forbidden();
-        const linkedUser = db.Users_Auth.find((u) => u.id === own.user_id);
-        const ownComp = db.Salary_Components.find((c) => c.teacher_id === own.id) || null;
-        const enrichedOwn = {
-          ...own,
-          email: own.email || linkedUser?.email || linkedUser?.username || session.email || '',
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+        const target = ctx.targetTeacher;
+        const linkedUser = db.Users_Auth.find((u) => u.id === target.user_id);
+        const ownComp = db.Salary_Components.find((c) => c.teacher_id === target.id) || null;
+        const enrichedTarget = {
+          ...target,
+          email: target.email || linkedUser?.email || linkedUser?.username || '',
           salary_component: ownComp,
         };
         const approvedPayrollIds = new Set(
           db.Payrolls.filter((p) => p.status === 'approved' || p.status === 'paid').map((p) => p.id)
         );
         const myApprovedSlips = db.Payroll_Details.filter(
-          (d) => d.teacher_id === own.id && approvedPayrollIds.has(d.payroll_id)
+          (d) => d.teacher_id === target.id && approvedPayrollIds.has(d.payroll_id)
         );
-        const allMySlips = db.Payroll_Details.filter((d) => d.teacher_id === own.id);
+        const allMySlips = db.Payroll_Details.filter((d) => d.teacher_id === target.id);
         const latestSlip = allMySlips.length ? allMySlips[allMySlips.length - 1] : null;
         const latestParent = latestSlip
           ? db.Payrolls.find((p) => p.id === latestSlip.payroll_id)
@@ -1230,12 +1315,16 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status: 200,
           data: {
             role: 'guru',
-            teacher: enrichedOwn,
+            teacher: enrichedTarget,
             totalSlips: allMySlips.length,
             latestNetSalary: myApprovedSlips.length
               ? myApprovedSlips[myApprovedSlips.length - 1].net_salary
               : 0,
             latestEstimatedNetSalary,
+            isTuOperator: ctx.isTuOperator,
+            isAssistingOther: ctx.isAssistingOther,
+            ownTeacherId: ctx.ownTeacher.id,
+            ownTeacherName: ctx.ownTeacher.name,
           },
         };
       }
@@ -1255,6 +1344,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     case 'teachers.list': {
       if (session.role === 'guru') {
         const own = getOwnedTeacher();
+        if (own && isTuOperatorFlag(own.is_tu_operator)) {
+          return { ok: true, status: 200, data: buildAssistableTeachersList() };
+        }
         return { ok: true, status: 200, data: own ? [own] : [] };
       }
       const enriched = db.Teachers.map((t) => {
@@ -1264,6 +1356,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           (linkedUser ? String(linkedUser.email || linkedUser.username || '') : '');
         return {
           ...t,
+          is_tu_operator: isTuOperatorFlag(t.is_tu_operator),
           email,
           salary_component: db.Salary_Components.find((c) => c.teacher_id === t.id) || null,
         };
@@ -1314,6 +1407,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         status: payload.status || 'GTY (Guru Tetap Yayasan)',
         bank_account: payload.bank_account,
         email: cleanEmail,
+        is_tu_operator: isTuOperatorFlag(payload.is_tu_operator),
       };
       db.Teachers.push(newTeacher);
 
@@ -1401,6 +1495,10 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         status: payload.status ?? existingTeacher.status,
         bank_account: payload.bank_account ?? existingTeacher.bank_account,
         email: nextEmail,
+        is_tu_operator:
+          payload.is_tu_operator !== undefined
+            ? isTuOperatorFlag(payload.is_tu_operator)
+            : isTuOperatorFlag(existingTeacher.is_tu_operator),
       };
       const compIdx = db.Salary_Components.findIndex((c) => c.teacher_id === payload.id);
       const nextCustomJson =
@@ -1493,6 +1591,10 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             status: item.status || existingTeacher.status,
             bank_account: cleanBank,
             email: updatedEmail,
+            is_tu_operator:
+              item.is_tu_operator !== undefined
+                ? isTuOperatorFlag(item.is_tu_operator)
+                : isTuOperatorFlag(existingTeacher.is_tu_operator),
           };
           const itemBase = Number(item.base_salary || 0);
           const itemRate = Number(item.hourly_rate || 0);
@@ -1566,6 +1668,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
             status: item.status || 'GTY (Guru Tetap Yayasan)',
             bank_account: cleanBank,
             email: cleanEmail,
+            is_tu_operator: isTuOperatorFlag(item.is_tu_operator),
           });
           const itemBase = Number(item.base_salary || 0);
           const itemRate = Number(item.hourly_rate || 0);
@@ -1663,9 +1766,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         }
       }
       if (session.role === 'guru') {
-        const own = getOwnedTeacher();
-        if (!own) return forbidden();
-        list = list.filter((a) => a.teacher_id === own.id);
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+        list = list.filter((a) => a.teacher_id === ctx.targetTeacher.id);
       }
       return { ok: true, status: 200, data: list };
     }
@@ -1751,9 +1854,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     case 'attendanceLogs.list': {
       let logs = [...(db.Attendance_Logs || [])];
       if (session.role === 'guru') {
-        const own = getOwnedTeacher();
-        if (!own) return forbidden();
-        logs = logs.filter((l) => l.teacher_id === own.id);
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+        logs = logs.filter((l) => l.teacher_id === ctx.targetTeacher.id);
       } else if (payload.teacher_id) {
         logs = logs.filter((l) => l.teacher_id === payload.teacher_id);
       }
@@ -1773,8 +1876,16 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'attendanceLogs.upsertMyLog': {
       if (!['guru', 'admin'].includes(session.role)) return forbidden();
-      const targetTeacherId =
-        session.role === 'guru' ? getOwnedTeacher()?.id : String(payload.teacher_id || '');
+      let targetTeacherId = '';
+      let assistedByName = '';
+      if (session.role === 'guru') {
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+        targetTeacherId = ctx.targetTeacher.id;
+        assistedByName = ctx.isAssistingOther ? ctx.assistedByName : '';
+      } else {
+        targetTeacherId = String(payload.teacher_id || '');
+      }
       if (!targetTeacherId) return forbidden();
 
       const rawDate = String(payload.date || '').trim();
@@ -1834,6 +1945,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status,
           jtm_hours: jtmHours,
           note,
+          assisted_by_name: assistedByName,
           validation_status: 'pending',
           validation_note: '',
           updated_at: nowIso,
@@ -1850,6 +1962,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status,
           jtm_hours: jtmHours,
           note,
+          assisted_by_name: assistedByName,
           validation_status: 'pending',
           validation_note: '',
           created_at: nowIso,
@@ -1897,8 +2010,16 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'attendanceLogs.syncDateLogs': {
       if (!['guru', 'admin'].includes(session.role)) return forbidden();
-      const targetTeacherId =
-        session.role === 'guru' ? getOwnedTeacher()?.id : String(payload.teacher_id || '');
+      let targetTeacherId = '';
+      let assistedByName = '';
+      if (session.role === 'guru') {
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+        targetTeacherId = ctx.targetTeacher.id;
+        assistedByName = ctx.isAssistingOther ? ctx.assistedByName : '';
+      } else {
+        targetTeacherId = String(payload.teacher_id || '');
+      }
       if (!targetTeacherId) return forbidden();
 
       const rawDate = String(payload.date || '').trim();
@@ -1974,6 +2095,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           status,
           jtm_hours: jtmHours,
           note,
+          assisted_by_name: isUnchanged
+            ? String(prevMatch.assisted_by_name || '')
+            : assistedByName,
           validation_status: isUnchanged
             ? normalizeLogValidationStatus(prevMatch.validation_status)
             : 'pending',
@@ -2032,8 +2156,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
       const target = logs[targetIdx];
       if (session.role === 'guru') {
-        const own = getOwnedTeacher();
-        if (!own || target.teacher_id !== own.id) return forbidden();
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+        if (target.teacher_id !== ctx.targetTeacher.id) return forbidden();
       }
 
       const locked = (db.Payrolls || []).some((p) => {
@@ -2398,8 +2523,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'payslips.myList': {
       if (session.role === 'guru') {
-        const own = getOwnedTeacher();
-        if (!own) return forbidden();
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
+        const own = ctx.targetTeacher;
         const mySlips = db.Payroll_Details.filter((d) => d.teacher_id === own.id)
           .map((d) => {
             const parent = db.Payrolls.find((p) => p.id === d.payroll_id);
@@ -2470,8 +2596,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'disbursements.estimates': {
       if (session.role !== 'guru') return forbidden();
-      const own = getOwnedTeacher();
-      if (!own) return forbidden();
+      const ctx = resolveGuruTargetContext(payload);
+      if (!ctx.ok) return ctx.response;
+      const own = ctx.targetTeacher;
 
       const buildEstimateSnapshot = (monthVal, yearVal) => {
         const targetKey = normalizePeriodKey(monthVal);
@@ -2733,12 +2860,12 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         String(b.created_at || '').localeCompare(String(a.created_at || ''))
       );
       if (session.role === 'guru') {
-        const own = getOwnedTeacher();
-        if (!own) return forbidden();
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
         return {
           ok: true,
           status: 200,
-          data: allReqs.filter((r) => r.teacher_id === own.id),
+          data: allReqs.filter((r) => r.teacher_id === ctx.targetTeacher.id),
         };
       }
       if (session.role === 'admin' || session.role === 'kepsek') {
@@ -2749,8 +2876,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
 
     case 'disbursements.create': {
       if (session.role !== 'guru') return forbidden();
-      const own = getOwnedTeacher();
-      if (!own) return forbidden();
+      const ctx = resolveGuruTargetContext(payload);
+      if (!ctx.ok) return ctx.response;
+      const own = ctx.targetTeacher;
 
       const periodKey = normalizePeriodKey(payload.month);
       const year = Number(payload.year);
@@ -2991,6 +3119,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         requested_amount: requestedAmount,
         approved_amount: requestedAmount,
         reason,
+        assisted_by_name: ctx.isAssistingOther ? ctx.assistedByName : '',
         status: 'pending_treasurer',
         treasurer_note: '',
         kepsek_note: '',
@@ -3012,6 +3141,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       const timingLabel =
         timing === 'early' ? 'Sebelum Waktunya (Pencairan Awal)' : 'Tepat Waktu (Kolektif)';
       const scopeLabel = scope === 'full' ? 'Seluruhnya' : 'Sebagian';
+      const tuAuditSuffix = ctx.isAssistingOther
+        ? ` (Diinput oleh TU: ${ctx.assistedByName})`
+        : '';
 
       db.Notifications.unshift({
         id: generateUuidV4(),
@@ -3019,12 +3151,27 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         recipient_teacher_id: '',
         recipient_email: adminEmails.join(', '),
         title: `Pengajuan Pencairan Gaji: ${own.name}`,
-        message: `${own.name} mengajukan pencairan ${scopeLabel} (${timingLabel}) sebesar Rp ${requestedAmount.toLocaleString('id-ID')} untuk periode ${periodKey}/${year}.${reason ? ` Catatan: ${reason}` : ''}`,
+        message: `${own.name} mengajukan pencairan ${scopeLabel} (${timingLabel}) sebesar Rp ${requestedAmount.toLocaleString('id-ID')} untuk periode ${periodKey}/${year}.${reason ? ` Catatan: ${reason}` : ''}${tuAuditSuffix}`,
         type: 'disbursement_submitted',
         ref_id: newReq.id,
         is_read: false,
         created_at: nowIso,
       });
+
+      if (ctx.isAssistingOther) {
+        db.Notifications.unshift({
+          id: generateUuidV4(),
+          recipient_role: 'guru',
+          recipient_teacher_id: own.id,
+          recipient_email: '',
+          title: 'Pengajuan Pencairan Dibantu TU',
+          message: `TU (${ctx.assistedByName}) mengajukan pencairan ${scopeLabel} sebesar Rp ${requestedAmount.toLocaleString('id-ID')} untuk periode ${periodKey}/${year} atas nama Anda.`,
+          type: 'disbursement_submitted',
+          ref_id: newReq.id,
+          is_read: false,
+          created_at: nowIso,
+        });
+      }
 
       bumpVersions(['disbursements', 'notifications']);
       saveDb(db);
@@ -3269,12 +3416,12 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         String(b.created_at || '').localeCompare(String(a.created_at || ''))
       );
       if (session.role === 'guru') {
-        const own = getOwnedTeacher();
-        if (!own) return forbidden();
+        const ctx = resolveGuruTargetContext(payload);
+        if (!ctx.ok) return ctx.response;
         return {
           ok: true,
           status: 200,
-          data: allReimbs.filter((r) => r.teacher_id === own.id),
+          data: allReimbs.filter((r) => r.teacher_id === ctx.targetTeacher.id),
         };
       }
       if (session.role === 'admin' || session.role === 'kepsek') {
@@ -3286,7 +3433,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     case 'reimbursements.create': {
       if (!['guru', 'admin'].includes(session.role)) return forbidden();
       const isAdminRoutine = session.role === 'admin';
-      const own = isAdminRoutine ? null : getOwnedTeacher();
+      const ctx = isAdminRoutine ? null : resolveGuruTargetContext(payload);
+      if (ctx && !ctx.ok) return ctx.response;
+      const own = ctx ? ctx.targetTeacher : null;
       if (!isAdminRoutine && !own) return forbidden();
 
       const expenseDate = String(payload.expense_date || '').trim();
@@ -3347,6 +3496,7 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         receipt_number: String(payload.receipt_number || '').trim().slice(0, 80),
         receipt_url: urlCheck.value,
         note: String(payload.note || '').trim().slice(0, 300),
+        assisted_by_name: !isAdminRoutine && ctx?.isAssistingOther ? ctx.assistedByName : '',
         amount,
         approved_amount: amount,
         status: isAdminRoutine ? 'approved_treasurer' : 'pending_treasurer',
@@ -3397,6 +3547,8 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         .filter((u) => u.role === 'admin')
         .map((u) => String(u.email || u.username || '').trim())
         .filter((e) => e.includes('@'));
+      const tuAuditSuffix =
+        ctx && ctx.isAssistingOther ? ` (Diinput oleh TU: ${ctx.assistedByName})` : '';
 
       db.Notifications.unshift({
         id: generateUuidV4(),
@@ -3404,12 +3556,27 @@ export async function executeSandboxRequest(method, action, token, payload = {})
         recipient_teacher_id: '',
         recipient_email: adminEmails.join(', '),
         title: `Catatan Belanja Sekolah Baru: ${own.name}`,
-        message: `${own.name} mencatat belanja sekolah "${title}" sebesar Rp ${amount.toLocaleString('id-ID')} untuk slip periode ${periodKey}/${year}.`,
+        message: `${own.name} mencatat belanja sekolah "${title}" sebesar Rp ${amount.toLocaleString('id-ID')} untuk slip periode ${periodKey}/${year}.${tuAuditSuffix}`,
         type: 'reimbursement_submitted',
         ref_id: newItem.id,
         is_read: false,
         created_at: nowIso,
       });
+
+      if (ctx && ctx.isAssistingOther) {
+        db.Notifications.unshift({
+          id: generateUuidV4(),
+          recipient_role: 'guru',
+          recipient_teacher_id: own.id,
+          recipient_email: '',
+          title: 'Belanja Sekolah Dicatat oleh TU',
+          message: `TU (${ctx.assistedByName}) mencatat belanja sekolah "${title}" sebesar Rp ${amount.toLocaleString('id-ID')} untuk slip periode ${periodKey}/${year} atas nama Anda.`,
+          type: 'reimbursement_submitted',
+          ref_id: newItem.id,
+          is_read: false,
+          created_at: nowIso,
+        });
+      }
 
       bumpVersions(['reimbursements', 'notifications']);
       saveDb(db);
@@ -3427,7 +3594,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     case 'reimbursements.update': {
       if (!['guru', 'admin'].includes(session.role)) return forbidden();
       const isAdminRoutine = session.role === 'admin';
-      const own = isAdminRoutine ? null : getOwnedTeacher();
+      const ctx = isAdminRoutine ? null : resolveGuruTargetContext(payload);
+      if (ctx && !ctx.ok) return ctx.response;
+      const own = ctx ? ctx.targetTeacher : null;
       if (!isAdminRoutine && !own) return forbidden();
       const target = (db.Reimbursements || []).find((r) => r.id === payload.id);
       if (!target) return notFound();
@@ -3499,6 +3668,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
       target.receipt_number = String(payload.receipt_number || '').trim().slice(0, 80);
       target.receipt_url = urlCheck.value;
       target.note = String(payload.note || '').trim().slice(0, 300);
+      if (!isAdminRoutine) {
+        target.assisted_by_name = ctx?.isAssistingOther ? ctx.assistedByName : '';
+      }
       target.amount = amount;
       target.approved_amount = amount;
       target.updated_at = new Date().toISOString();
@@ -3511,7 +3683,9 @@ export async function executeSandboxRequest(method, action, token, payload = {})
     case 'reimbursements.delete': {
       if (!['guru', 'admin'].includes(session.role)) return forbidden();
       const isAdminRoutine = session.role === 'admin';
-      const own = isAdminRoutine ? null : getOwnedTeacher();
+      const ctx = isAdminRoutine ? null : resolveGuruTargetContext(payload);
+      if (ctx && !ctx.ok) return ctx.response;
+      const own = ctx ? ctx.targetTeacher : null;
       if (!isAdminRoutine && !own) return forbidden();
       const idx = (db.Reimbursements || []).findIndex((r) => r.id === payload.id);
       if (idx === -1) return notFound();

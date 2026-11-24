@@ -44,9 +44,10 @@ const TONE_BADGE_CLASS = {
   neutral: 'nim-badge',
 };
 
-function loadStoredClassList() {
+function loadStoredClassList(storageKey = CUSTOM_CLASSES_STORAGE_KEY) {
   try {
-    const raw = localStorage.getItem(CUSTOM_CLASSES_STORAGE_KEY);
+    const raw =
+      localStorage.getItem(storageKey) || localStorage.getItem(CUSTOM_CLASSES_STORAGE_KEY);
     if (!raw) return DEFAULT_TEACHING_CLASSES;
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed) && parsed.length > 0) {
@@ -58,9 +59,9 @@ function loadStoredClassList() {
   return DEFAULT_TEACHING_CLASSES;
 }
 
-function saveStoredClassList(list) {
+function saveStoredClassList(list, storageKey = CUSTOM_CLASSES_STORAGE_KEY) {
   try {
-    localStorage.setItem(CUSTOM_CLASSES_STORAGE_KEY, JSON.stringify(list));
+    localStorage.setItem(storageKey, JSON.stringify(list));
   } catch {
     // Ignore storage write error
   }
@@ -86,6 +87,8 @@ function createDefaultClassRowState(existingLog = null) {
 
 export function GuruSelfAttendanceSection({
   teacherProfile,
+  targetTeacherId = '',
+  assistingMeta = null,
   initialPeriod,
   initialLogs,
   initialAttendanceSummary,
@@ -97,6 +100,10 @@ export function GuruSelfAttendanceSection({
   const initialMonthVal = Number(initialPeriod?.month) || Number(initialDateParts[1]) || 11;
   const initialYearVal = Number(initialPeriod?.year) || Number(initialDateParts[0]) || 2026;
   const hasPrefetchedLogs = Array.isArray(initialLogs);
+  const classStorageKey = useMemo(() => {
+    const scopeId = String(targetTeacherId || teacherProfile?.id || '').trim();
+    return scopeId ? `${CUSTOM_CLASSES_STORAGE_KEY}_${scopeId}` : CUSTOM_CLASSES_STORAGE_KEY;
+  }, [targetTeacherId, teacherProfile?.id]);
 
   const [selectedMonth, setSelectedMonth] = useState(initialMonthVal);
   const [selectedYear, setSelectedYear] = useState(initialYearVal);
@@ -115,7 +122,7 @@ export function GuruSelfAttendanceSection({
   const [saving, setSaving] = useState(false);
 
   const [dateInput, setDateInput] = useState(todayIso);
-  const [classList, setClassList] = useState(() => loadStoredClassList());
+  const [classList, setClassList] = useState(() => loadStoredClassList(classStorageKey));
   const [newClassInput, setNewClassInput] = useState('');
   const [classRowsState, setClassRowsState] = useState({});
   const [editingHighlightClass, setEditingHighlightClass] = useState('');
@@ -125,6 +132,10 @@ export function GuruSelfAttendanceSection({
   const classListRef = useRef(classList);
   classListRef.current = classList;
   const skipInitialFetchRef = useRef(hasPrefetchedLogs);
+
+  useEffect(() => {
+    setClassList(loadStoredClassList(classStorageKey));
+  }, [classStorageKey]);
 
   const buildChecklistStateForDate = useCallback((targetDate, sourceLogs, classes) => {
     const cleanTargetDate = normalizeIsoDateOnly(targetDate);
@@ -145,9 +156,10 @@ export function GuruSelfAttendanceSection({
     async ({ silent = false } = {}) => {
       if (!silent) setLoading(true);
       try {
+        const targetParam = targetTeacherId ? { target_teacher_id: targetTeacherId } : {};
         const [logRows, attRows] = await Promise.all([
-          api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear }),
-          api.get('attendances.list', { month: selectedMonth, year: selectedYear }),
+          api.get('attendanceLogs.list', { month: selectedMonth, year: selectedYear, ...targetParam }),
+          api.get('attendances.list', { month: selectedMonth, year: selectedYear, ...targetParam }),
         ]);
         const normalizedLogs = (Array.isArray(logRows) ? logRows : []).map((row) => ({
           ...row,
@@ -172,7 +184,7 @@ export function GuruSelfAttendanceSection({
                 changed = true;
               }
             }
-            if (changed) saveStoredClassList(merged);
+            if (changed) saveStoredClassList(merged, classStorageKey);
             return merged;
           });
         }
@@ -186,7 +198,7 @@ export function GuruSelfAttendanceSection({
         if (!silent) setLoading(false);
       }
     },
-    [selectedMonth, selectedYear, onLogsCountChange]
+    [selectedMonth, selectedYear, targetTeacherId, classStorageKey, onLogsCountChange]
   );
 
   useEffect(() => {
@@ -265,7 +277,7 @@ export function GuruSelfAttendanceSection({
     if (!nextClasses.some((c) => c.toLowerCase() === targetClass.toLowerCase())) {
       nextClasses = [...nextClasses, targetClass];
       setClassList(nextClasses);
-      saveStoredClassList(nextClasses);
+      saveStoredClassList(nextClasses, classStorageKey);
     }
 
     const parts = isoDate.split('-');
@@ -383,7 +395,7 @@ export function GuruSelfAttendanceSection({
     }
     const nextList = [...classList, clean];
     setClassList(nextList);
-    saveStoredClassList(nextList);
+    saveStoredClassList(nextList, classStorageKey);
     setClassRowsState((prev) => ({
       ...prev,
       [clean]: { ...createDefaultClassRowState(null), checked: true },
@@ -398,7 +410,7 @@ export function GuruSelfAttendanceSection({
     }
     const nextList = classList.filter((c) => c !== clsName);
     setClassList(nextList);
-    saveStoredClassList(nextList);
+    saveStoredClassList(nextList, classStorageKey);
   };
 
   const checkedEntries = useMemo(() => {
@@ -448,6 +460,7 @@ export function GuruSelfAttendanceSection({
       await api.post('attendanceLogs.syncDateLogs', {
         date: cleanDate,
         entries: checkedEntries,
+        ...(targetTeacherId ? { target_teacher_id: targetTeacherId } : {}),
       });
       if (checkedEntries.length === 0) {
         notify.info(`Catatan kelas pada ${formatDateIndo(cleanDate)} dikosongkan.`);
@@ -472,7 +485,10 @@ export function GuruSelfAttendanceSection({
   const handleConfirmDelete = async () => {
     if (!deleteTarget) return;
     try {
-      await api.delete('attendanceLogs.deleteMyLog', { id: deleteTarget.id });
+      await api.delete('attendanceLogs.deleteMyLog', {
+        id: deleteTarget.id,
+        ...(targetTeacherId ? { target_teacher_id: targetTeacherId } : {}),
+      });
       notify.success(
         `Catatan ${deleteTarget.class_name || 'Kelas'} (${formatDateIndo(deleteTarget.date)}) dihapus.`
       );
@@ -503,6 +519,11 @@ export function GuruSelfAttendanceSection({
               <CheckCircle2 className="h-3 w-3" />
               <span>Tersinkron ke Admin / Bendahara</span>
             </span>
+            {assistingMeta?.isAssistingOther && (
+              <span className="nim-badge nim-badge--warn">
+                Mengisi atas nama: {assistingMeta.targetTeacherName}
+              </span>
+            )}
           </div>
           <p className="mt-1 text-xs text-[var(--muted)]">
             Centang kelas yang diampu pada tanggal tersebut, pilih kondisi (Hadir = 1 &amp; 100%
@@ -1044,6 +1065,11 @@ export function GuruSelfAttendanceSection({
                             <span className={`${vMeta.badgeCls} !text-[10px]`}>
                               {vMeta.label}
                             </span>
+                            {log.assisted_by_name && (
+                              <span className="nim-badge nim-badge--accent !text-[10px]">
+                                Diinput oleh TU: {log.assisted_by_name}
+                              </span>
+                            )}
                           </div>
                           <p
                             className={`text-[11px] text-[var(--muted)] tabular-nums ${

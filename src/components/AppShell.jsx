@@ -280,7 +280,11 @@ export function AppShell({
   };
 
   const isAdmin = user?.role === 'admin';
-  const roleMeta = user ? ROLE_META[user.role] || ROLE_META.guru : null;
+  const roleMeta = user
+    ? user.role === 'guru' && user.isTuOperator
+      ? { label: 'TU Pendamping PTK', tone: 'nim-badge--accent' }
+      : ROLE_META[user.role] || ROLE_META.guru
+    : null;
   const activeNav = navItems.find((item) => item.id === activeTab) || navItems[0];
   const shortBrand = schoolProfile.app_short_name || 'SIPAYROLL';
   const schoolSubtitle =

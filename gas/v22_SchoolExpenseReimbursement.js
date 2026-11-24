@@ -71,7 +71,16 @@ const SHEETS = Object.freeze({
 
 const SCHEMA_HEADERS = Object.freeze({
   [SHEETS.USERS_AUTH]: ['id', 'username', 'password_hash', 'role'],
-  [SHEETS.TEACHERS]: ['id', 'user_id', 'nip', 'name', 'status', 'bank_account', 'staff_category'],
+  [SHEETS.TEACHERS]: [
+    'id',
+    'user_id',
+    'nip',
+    'name',
+    'status',
+    'bank_account',
+    'staff_category',
+    'is_tu_operator',
+  ],
   [SHEETS.SALARY_COMPONENTS]: [
     'id',
     'teacher_id',
@@ -96,6 +105,7 @@ const SCHEMA_HEADERS = Object.freeze({
     'class_name',
     'validation_status',
     'validation_note',
+    'assisted_by_name',
   ],
   [SHEETS.PAYROLLS]: ['id', 'month', 'year', 'total_budget', 'status'],
   [SHEETS.PAYROLL_DETAILS]: ['id', 'payroll_id', 'teacher_id', 'net_salary', 'details_json'],
@@ -123,6 +133,7 @@ const SCHEMA_HEADERS = Object.freeze({
     'treasurer_reviewed_at',
     'kepsek_reviewed_at',
     'slip_issued_at',
+    'assisted_by_name',
   ],
   [SHEETS.REIMBURSEMENTS]: [
     'id',
@@ -146,6 +157,7 @@ const SCHEMA_HEADERS = Object.freeze({
     'updated_at',
     'treasurer_reviewed_at',
     'kepsek_reviewed_at',
+    'assisted_by_name',
   ],
   [SHEETS.NOTIFICATIONS]: [
     'id',
@@ -291,7 +303,7 @@ function routeAuthenticatedRequest(method, action, payload, session) {
     switch (action) {
       case 'dashboard.summary':
         if (method !== 'GET') return forbiddenResponse();
-        return handleDashboardSummary(session);
+        return handleDashboardSummary(session, payload);
 
       case 'teachers.list':
         if (method !== 'GET') return forbiddenResponse();
@@ -399,7 +411,7 @@ function routeAuthenticatedRequest(method, action, payload, session) {
 
       case 'payslips.myList':
         if (method !== 'GET') return forbiddenResponse();
-        return handleGetMyPayslips(session);
+        return handleGetMyPayslips(session, payload);
 
       case 'payslips.getById':
         if (method !== 'GET') return forbiddenResponse();
@@ -411,7 +423,7 @@ function routeAuthenticatedRequest(method, action, payload, session) {
 
       case 'disbursements.list':
         if (method !== 'GET') return forbiddenResponse();
-        return handleListDisbursementRequests(session);
+        return handleListDisbursementRequests(session, payload);
 
       case 'disbursements.create':
         if (method !== 'POST' || session.role !== ROLES.GURU) return forbiddenResponse();
@@ -431,7 +443,7 @@ function routeAuthenticatedRequest(method, action, payload, session) {
 
       case 'reimbursements.list':
         if (method !== 'GET') return forbiddenResponse();
-        return handleListReimbursements(session);
+        return handleListReimbursements(session, payload);
 
       case 'reimbursements.create':
         if (method !== 'POST' || ![ROLES.GURU, ROLES.ADMIN].includes(session.role)) {
@@ -726,6 +738,10 @@ function handleLogin(payload) {
       ? 'Kepala Sekolah'
       : verifiedEmail;
 
+  const isTuOperator = Boolean(
+    teacherProfile && isTuOperatorFlagGas(teacherProfile.is_tu_operator)
+  );
+
   const sessionData = {
     userId: userId,
     username: verifiedEmail,
@@ -733,6 +749,7 @@ function handleLogin(payload) {
     role: role,
     teacherId: teacherProfile ? String(teacherProfile.id) : null,
     teacherName: displayName,
+    isTuOperator: isTuOperator,
     picture: oauthResult.picture || '',
     exp: Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS,
   };
@@ -750,6 +767,7 @@ function handleLogin(payload) {
         email: sessionData.email,
         role: sessionData.role,
         teacherId: sessionData.teacherId,
+        isTuOperator: sessionData.isTuOperator,
         name: sessionData.teacherName,
         picture: sessionData.picture,
       },
@@ -758,6 +776,11 @@ function handleLogin(payload) {
 }
 
 function handleGetProfile(session) {
+  var liveIsTuOperator = false;
+  if (session.role === ROLES.GURU) {
+    var own = resolveOwnedTeacherRecord(session);
+    liveIsTuOperator = Boolean(own && isTuOperatorFlagGas(own.is_tu_operator));
+  }
   return buildJsonResponse(200, {
     ok: true,
     data: {
@@ -766,6 +789,7 @@ function handleGetProfile(session) {
       email: session.email || session.username,
       role: session.role,
       teacherId: session.teacherId,
+      isTuOperator: liveIsTuOperator,
       name: session.teacherName,
       picture: session.picture || '',
     },
@@ -889,13 +913,110 @@ function revokeSessionToken(token) {
  * 4. BUSINESS LOGIC & OBJECT-LEVEL RBAC HANDLERS
  * ========================================================================== */
 
+function isTuOperatorFlagGas(val) {
+  if (val === true || val === 1) return true;
+  var clean = String(val || '').trim().toLowerCase();
+  return clean === 'true' || clean === '1' || clean === 'ya';
+}
+
 function resolveOwnedTeacherRecord(session) {
   const teachers = readSheetRecords(SHEETS.TEACHERS);
-  return (
+  const targetUserId = String(session.userId || '').trim();
+  const sessEmail = String(session.email || session.username || '').trim().toLowerCase();
+  var found =
     teachers.find(function (t) {
-      return String(t.user_id || '').trim() === String(session.userId || '').trim();
-    }) || null
+      return String(t.user_id || '').trim() === targetUserId;
+    }) || null;
+  if (!found && sessEmail) {
+    const users = readSheetRecords(SHEETS.USERS_AUTH);
+    const matchedUser = users.find(function (u) {
+      return String(u.email || u.username || '').trim().toLowerCase() === sessEmail;
+    });
+    if (matchedUser) {
+      found =
+        teachers.find(function (t) {
+          return String(t.user_id || '').trim() === String(matchedUser.id || '').trim();
+        }) || null;
+    }
+  }
+  return found;
+}
+
+function resolveGuruTargetContextGas(session, payload) {
+  var ownTeacher = resolveOwnedTeacherRecord(session);
+  if (!ownTeacher) {
+    return {
+      ok: false,
+      status: 403,
+      error: '403 Forbidden: Profil PTK untuk akun ini tidak ditemukan.',
+    };
+  }
+  var isTuOperator = isTuOperatorFlagGas(ownTeacher.is_tu_operator);
+  var reqTargetId = sanitizeString(
+    (payload && (payload.target_teacher_id || payload.acting_teacher_id)) || ''
   );
+  if (!reqTargetId || reqTargetId === String(ownTeacher.id)) {
+    return {
+      ok: true,
+      ownTeacher: ownTeacher,
+      targetTeacher: ownTeacher,
+      isTuOperator: isTuOperator,
+      isAssistingOther: false,
+      assistedByName: '',
+    };
+  }
+  if (!isTuOperator) {
+    return {
+      ok: false,
+      status: 403,
+      error: '403 Forbidden: Akun Anda tidak ditunjuk sebagai TU Pendamping PTK.',
+    };
+  }
+  var teachers = readSheetRecords(SHEETS.TEACHERS);
+  var targetTeacher =
+    teachers.find(function (t) {
+      return String(t.id) === reqTargetId;
+    }) || null;
+  if (!targetTeacher) {
+    return {
+      ok: false,
+      status: 404,
+      error: '404 Not Found: Data PTK tujuan tidak ditemukan.',
+    };
+  }
+  return {
+    ok: true,
+    ownTeacher: ownTeacher,
+    targetTeacher: targetTeacher,
+    isTuOperator: true,
+    isAssistingOther: true,
+    assistedByName: sanitizeString(ownTeacher.name || session.teacherName || 'Staf TU') || 'Staf TU',
+  };
+}
+
+function buildAssistableTeachersListGas() {
+  var teachers = readSheetRecords(SHEETS.TEACHERS);
+  var users = readSheetRecords(SHEETS.USERS_AUTH);
+  return teachers
+    .map(function (t) {
+      var linkedUser =
+        users.find(function (u) {
+          return String(u.id) === String(t.user_id);
+        }) || null;
+      var email = linkedUser ? String(linkedUser.username || '').trim().toLowerCase() : '';
+      return {
+        id: String(t.id),
+        nip: sanitizeString(t.nip || ''),
+        name: sanitizeString(t.name || ''),
+        staff_category: resolveStaffCategoryGas(t.staff_category, t.status),
+        status: sanitizeString(t.status || ''),
+        email: email,
+        is_tu_operator: isTuOperatorFlagGas(t.is_tu_operator),
+      };
+    })
+    .sort(function (a, b) {
+      return String(a.name || '').localeCompare(String(b.name || ''));
+    });
 }
 
 function getSchoolProfileDataGas() {
@@ -944,29 +1065,36 @@ function handleUpdateSchoolProfile(payload) {
   return buildJsonResponse(200, { ok: true, data: profileObj });
 }
 
-function getDashboardSummaryDataGas(session) {
+function getDashboardSummaryDataGas(session, payload) {
   const teachers = readSheetRecords(SHEETS.TEACHERS);
   const payrolls = readSheetRecords(SHEETS.PAYROLLS);
   const details = readSheetRecords(SHEETS.PAYROLL_DETAILS);
 
   if (session.role === ROLES.GURU) {
-    const ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) {
+    const ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
       return {
-        role: ROLES.GURU,
-        teacher: { name: session.teacherName, nip: '-', status: 'Guru', bank_account: '-' },
-        totalSlips: 0,
-        latestNetSalary: 0,
+        _errorStatus: ctx.status || 403,
+        _errorMessage: ctx.error || '403 Forbidden',
       };
     }
+    const targetTeacher = ctx.targetTeacher;
 
     const components = readSheetRecords(SHEETS.SALARY_COMPONENTS);
     const ownComp =
       components.find(function (c) {
-        return String(c.teacher_id) === String(ownTeacher.id);
+        return String(c.teacher_id) === String(targetTeacher.id);
       }) || null;
-    const enrichedTeacher = Object.assign({}, ownTeacher, {
-      staff_category: resolveStaffCategoryGas(ownTeacher.staff_category, ownTeacher.status),
+    const users = readSheetRecords(SHEETS.USERS_AUTH);
+    const linkedUser =
+      users.find(function (u) {
+        return String(u.id) === String(targetTeacher.user_id);
+      }) || null;
+    const targetEmail = linkedUser ? String(linkedUser.username || '').trim().toLowerCase() : '';
+    const enrichedTeacher = Object.assign({}, targetTeacher, {
+      staff_category: resolveStaffCategoryGas(targetTeacher.staff_category, targetTeacher.status),
+      email: targetEmail,
+      is_tu_operator: isTuOperatorFlagGas(targetTeacher.is_tu_operator),
       salary_component: ownComp,
     });
 
@@ -981,10 +1109,10 @@ function getDashboardSummaryDataGas(session) {
     );
 
     const myApprovedSlips = details.filter(function (d) {
-      return String(d.teacher_id) === String(ownTeacher.id) && approvedPayrollIds.has(String(d.payroll_id));
+      return String(d.teacher_id) === String(targetTeacher.id) && approvedPayrollIds.has(String(d.payroll_id));
     });
     const allMySlips = details.filter(function (d) {
-      return String(d.teacher_id) === String(ownTeacher.id);
+      return String(d.teacher_id) === String(targetTeacher.id);
     });
     const disbRequests = readSheetRecords(SHEETS.DISBURSEMENT_REQUESTS);
     const reimbs = readSheetRecords(SHEETS.REIMBURSEMENTS);
@@ -1005,6 +1133,10 @@ function getDashboardSummaryDataGas(session) {
       latestNetSalary:
         myApprovedSlips.length > 0 ? Number(myApprovedSlips[myApprovedSlips.length - 1].net_salary || 0) : 0,
       latestEstimatedNetSalary: latestEstimatedNetSalary,
+      isTuOperator: ctx.isTuOperator,
+      isAssistingOther: ctx.isAssistingOther,
+      ownTeacherId: String(ctx.ownTeacher.id),
+      ownTeacherName: sanitizeString(ctx.ownTeacher.name || session.teacherName || ''),
     };
   }
 
@@ -1021,10 +1153,17 @@ function getDashboardSummaryDataGas(session) {
   };
 }
 
-function handleDashboardSummary(session) {
+function handleDashboardSummary(session, payload) {
+  const sumData = getDashboardSummaryDataGas(session, payload);
+  if (sumData && sumData._errorStatus) {
+    return buildJsonResponse(sumData._errorStatus, {
+      ok: false,
+      error: sumData._errorMessage,
+    });
+  }
   return buildJsonResponse(200, {
     ok: true,
-    data: getDashboardSummaryDataGas(session),
+    data: sumData,
   });
 }
 
@@ -1049,15 +1188,18 @@ function getTeachersListDataGas(session) {
   const users = readSheetRecords(SHEETS.USERS_AUTH);
 
   if (session.role === ROLES.GURU) {
-    return teachers
-      .filter(function (t) {
-        return String(t.user_id) === String(session.userId);
-      })
-      .map(function (t) {
-        return Object.assign({}, t, {
-          staff_category: resolveStaffCategoryGas(t.staff_category, t.status),
-        });
-      });
+    const own = resolveOwnedTeacherRecord(session);
+    if (own && isTuOperatorFlagGas(own.is_tu_operator)) {
+      return buildAssistableTeachersListGas();
+    }
+    return own
+      ? [
+          Object.assign({}, own, {
+            staff_category: resolveStaffCategoryGas(own.staff_category, own.status),
+            is_tu_operator: false,
+          }),
+        ]
+      : [];
   }
 
   return teachers.map(function (t) {
@@ -1072,6 +1214,7 @@ function getTeachersListDataGas(session) {
     const email = linkedUser ? String(linkedUser.username || '').trim().toLowerCase() : '';
     return Object.assign({}, t, {
       staff_category: resolveStaffCategoryGas(t.staff_category, t.status),
+      is_tu_operator: isTuOperatorFlagGas(t.is_tu_operator),
       email: email,
       salary_component: comp,
     });
@@ -1092,8 +1235,12 @@ function handleGetTeacherById(session, payload) {
   });
   if (!teacher) return notFoundResponse();
 
-  if (session.role === ROLES.GURU && String(teacher.user_id) !== String(session.userId)) {
-    return forbiddenResponse();
+  if (session.role === ROLES.GURU) {
+    const own = resolveOwnedTeacherRecord(session);
+    const canAssist = Boolean(own && isTuOperatorFlagGas(own.is_tu_operator));
+    if (!own || (!canAssist && String(teacher.id) !== String(own.id))) {
+      return forbiddenResponse();
+    }
   }
 
   return buildJsonResponse(200, { ok: true, data: teacher });
@@ -1133,6 +1280,7 @@ function handleCreateTeacher(payload) {
   }
 
   const teacherId = Utilities.getUuid();
+  const isTuOperator = isTuOperatorFlagGas(payload.is_tu_operator);
   const newTeacher = {
     id: teacherId,
     user_id: userId,
@@ -1141,6 +1289,7 @@ function handleCreateTeacher(payload) {
     status: status,
     bank_account: bankAccount,
     staff_category: staffCategory,
+    is_tu_operator: isTuOperator,
   };
   appendSheetRecord(SHEETS.TEACHERS, newTeacher);
 
@@ -1189,6 +1338,10 @@ function handleUpdateTeacher(payload) {
       payload.staff_category !== undefined
         ? resolveStaffCategoryGas(payload.staff_category, nextStatus)
         : resolveStaffCategoryGas(existing.staff_category, nextStatus);
+    const nextIsTu =
+      payload.is_tu_operator !== undefined
+        ? isTuOperatorFlagGas(payload.is_tu_operator)
+        : isTuOperatorFlagGas(existing.is_tu_operator);
     return {
       id: existing.id,
       user_id: existing.user_id,
@@ -1197,6 +1350,7 @@ function handleUpdateTeacher(payload) {
       status: nextStatus,
       bank_account: payload.bank_account !== undefined ? sanitizeString(payload.bank_account) : existing.bank_account,
       staff_category: nextCategory,
+      is_tu_operator: nextIsTu,
     };
   });
 
@@ -1315,6 +1469,10 @@ function handleBulkImportTeachers(payload) {
         staff_category: item.staff_category
           ? cleanCategory
           : resolveStaffCategoryGas(matchTeacher.staff_category, cleanStatus || matchTeacher.status),
+        is_tu_operator:
+          item.is_tu_operator !== undefined
+            ? isTuOperatorFlagGas(item.is_tu_operator)
+            : isTuOperatorFlagGas(matchTeacher.is_tu_operator),
       };
       teachersDirty = true;
 
@@ -1400,6 +1558,7 @@ function handleBulkImportTeachers(payload) {
         status: cleanStatus,
         bank_account: cleanBank,
         staff_category: cleanCategory,
+        is_tu_operator: isTuOperatorFlagGas(item.is_tu_operator),
       };
       existingTeachers.push(newTeacher);
       teachersDirty = true;
@@ -1653,10 +1812,11 @@ function getAttendancesListDataGas(session, payload) {
   }
 
   if (session.role === ROLES.GURU) {
-    const ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) return null;
+    const ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) return { _errorStatus: ctx.status || 403, _errorMessage: ctx.error };
+    const targetTeacher = ctx.targetTeacher;
     records = records.filter(function (r) {
-      return String(r.teacher_id) === String(ownTeacher.id);
+      return String(r.teacher_id) === String(targetTeacher.id);
     });
   }
 
@@ -1666,6 +1826,12 @@ function getAttendancesListDataGas(session, payload) {
 function handleListAttendances(session, payload) {
   const records = getAttendancesListDataGas(session, payload);
   if (records === null) return forbiddenResponse();
+  if (records && !Array.isArray(records) && records._errorStatus) {
+    return buildJsonResponse(records._errorStatus, {
+      ok: false,
+      error: records._errorMessage,
+    });
+  }
   return buildJsonResponse(200, { ok: true, data: records });
 }
 
@@ -1931,6 +2097,7 @@ function getAttendanceLogsListDataGas(session, payload) {
       class_name: sanitizeString(r.class_name || 'Kelas Umum') || 'Kelas Umum',
       validation_status: normalizeLogValidationStatusGas(r.validation_status),
       validation_note: sanitizeString(r.validation_note || ''),
+      assisted_by_name: sanitizeString(r.assisted_by_name || ''),
     });
   });
   var monthKey = payload && payload.month ? normalizePeriodKey(payload.month) : '';
@@ -1938,10 +2105,13 @@ function getAttendanceLogsListDataGas(session, payload) {
   var filterTeacherId = payload && payload.teacher_id ? sanitizeString(payload.teacher_id) : '';
 
   if (session.role === ROLES.GURU) {
-    var ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) return null;
+    var ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
+      return { _errorStatus: ctx.status || 403, _errorMessage: ctx.error };
+    }
+    var targetTeacher = ctx.targetTeacher;
     records = records.filter(function (r) {
-      return String(r.teacher_id) === String(ownTeacher.id);
+      return String(r.teacher_id) === String(targetTeacher.id);
     });
   } else if (filterTeacherId) {
     records = records.filter(function (r) {
@@ -1972,15 +2142,25 @@ function getAttendanceLogsListDataGas(session, payload) {
 function handleListAttendanceLogs(session, payload) {
   var records = getAttendanceLogsListDataGas(session, payload);
   if (records === null) return forbiddenResponse();
+  if (records && !Array.isArray(records) && records._errorStatus) {
+    return buildJsonResponse(records._errorStatus, {
+      ok: false,
+      error: records._errorMessage,
+    });
+  }
   return buildJsonResponse(200, { ok: true, data: records });
 }
 
 function handleUpsertMyAttendanceLog(session, payload) {
   var targetTeacherId = '';
+  var assistedByName = '';
   if (session.role === ROLES.GURU) {
-    var ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) return forbiddenResponse();
-    targetTeacherId = String(ownTeacher.id);
+    var ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
+      return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+    }
+    targetTeacherId = String(ctx.targetTeacher.id);
+    assistedByName = ctx.isAssistingOther ? ctx.assistedByName : '';
   } else {
     targetTeacherId = sanitizeString(payload.teacher_id);
   }
@@ -2056,6 +2236,7 @@ function handleUpsertMyAttendanceLog(session, payload) {
         class_name: className,
         validation_status: 'pending',
         validation_note: '',
+        assisted_by_name: assistedByName,
       };
     });
     savedLog = Object.assign({}, savedLog, { date: rawDate });
@@ -2074,6 +2255,7 @@ function handleUpsertMyAttendanceLog(session, payload) {
       class_name: className,
       validation_status: 'pending',
       validation_note: '',
+      assisted_by_name: assistedByName,
     };
     appendSheetRecord(SHEETS.ATTENDANCE_LOGS, savedLog);
     savedLog = Object.assign({}, savedLog, { date: rawDate });
@@ -2092,10 +2274,14 @@ function handleUpsertMyAttendanceLog(session, payload) {
 
 function handleSyncDateAttendanceLogs(session, payload) {
   var targetTeacherId = '';
+  var assistedByName = '';
   if (session.role === ROLES.GURU) {
-    var ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) return forbiddenResponse();
-    targetTeacherId = String(ownTeacher.id);
+    var ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
+      return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+    }
+    targetTeacherId = String(ctx.targetTeacher.id);
+    assistedByName = ctx.isAssistingOther ? ctx.assistedByName : '';
   } else {
     targetTeacherId = sanitizeString(payload.teacher_id);
   }
@@ -2206,6 +2392,9 @@ function handleSyncDateAttendanceLogs(session, payload) {
         ? normalizeLogValidationStatusGas(prevMatch.validation_status)
         : 'pending',
       validation_note: isUnchanged ? sanitizeString(prevMatch.validation_note || '') : '',
+      assisted_by_name: isUnchanged
+        ? sanitizeString(prevMatch.assisted_by_name || '')
+        : assistedByName,
     };
     newRowRecords.push(rowRecord);
     savedLogs.push(Object.assign({}, rowRecord, { date: rawDate }));
@@ -2237,8 +2426,11 @@ function handleDeleteMyAttendanceLog(session, payload) {
   if (!target) return notFoundResponse();
 
   if (session.role === ROLES.GURU) {
-    var ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher || String(target.teacher_id) !== String(ownTeacher.id)) {
+    var ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
+      return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+    }
+    if (String(target.teacher_id) !== String(ctx.targetTeacher.id)) {
       return forbiddenResponse();
     }
   }
@@ -2325,6 +2517,7 @@ function handleValidateAttendanceLogs(payload) {
         class_name: row.class_name,
         validation_status: vStatus,
         validation_note: vStatus === 'invalid' ? vNote : '',
+        assisted_by_name: sanitizeString(row.assisted_by_name || ''),
       };
       allLogs[j] = updatedRow;
       updatedLogs.push(Object.assign({}, updatedRow, { date: cleanDate }));
@@ -2892,7 +3085,7 @@ function handleGetPayrollDetailsByPayrollId(session, payload) {
   return buildJsonResponse(200, { ok: true, data: details });
 }
 
-function getMyPayslipsDataGas(session) {
+function getMyPayslipsDataGas(session, payload) {
   const payrolls = readSheetRecords(SHEETS.PAYROLLS);
   const details = readSheetRecords(SHEETS.PAYROLL_DETAILS);
   const teachers = readSheetRecords(SHEETS.TEACHERS);
@@ -2900,10 +3093,11 @@ function getMyPayslipsDataGas(session) {
   const reimbs = readSheetRecords(SHEETS.REIMBURSEMENTS);
 
   if (session.role === ROLES.GURU) {
-    const ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) {
-      return [];
+    const ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
+      return { _errorStatus: ctx.status || 403, _errorMessage: ctx.error };
     }
+    const ownTeacher = ctx.targetTeacher;
 
     const mySlips = details
       .filter(function (d) {
@@ -2998,8 +3192,15 @@ function getMyPayslipsDataGas(session) {
   });
 }
 
-function handleGetMyPayslips(session) {
-  return buildJsonResponse(200, { ok: true, data: getMyPayslipsDataGas(session) });
+function handleGetMyPayslips(session, payload) {
+  const result = getMyPayslipsDataGas(session, payload);
+  if (result && !Array.isArray(result) && result._errorStatus) {
+    return buildJsonResponse(result._errorStatus, {
+      ok: false,
+      error: result._errorMessage,
+    });
+  }
+  return buildJsonResponse(200, { ok: true, data: result });
 }
 
 function handleGetPayslipById(session, payload) {
@@ -3014,7 +3215,8 @@ function handleGetPayslipById(session, payload) {
 
   if (session.role === ROLES.GURU) {
     const ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher || String(slip.teacher_id) !== String(ownTeacher.id)) {
+    const canAssist = Boolean(ownTeacher && isTuOperatorFlagGas(ownTeacher.is_tu_operator));
+    if (!ownTeacher || (!canAssist && String(slip.teacher_id) !== String(ownTeacher.id))) {
       return forbiddenResponse();
     }
   }
@@ -3055,24 +3257,40 @@ function handleBootstrapKepsek(session) {
 }
 
 function handleBootstrapGuru(session, payload) {
+  const ctx = resolveGuruTargetContextGas(session, payload);
+  if (!ctx.ok) {
+    return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+  }
   const now = new Date();
-  const queryPayload = {
-    month: payload && payload.month ? payload.month : now.getMonth() + 1,
-    year: payload && payload.year ? payload.year : now.getFullYear(),
-  };
+  const targetOnly = ctx.isAssistingOther
+    ? { target_teacher_id: String(ctx.targetTeacher.id) }
+    : {};
+  const queryPayload = Object.assign(
+    {
+      month: payload && payload.month ? payload.month : now.getMonth() + 1,
+      year: payload && payload.year ? payload.year : now.getFullYear(),
+    },
+    targetOnly
+  );
   return buildJsonResponse(200, {
     ok: true,
     data: {
-      summary: getDashboardSummaryDataGas(session),
-      slips: getMyPayslipsDataGas(session) || [],
+      summary: getDashboardSummaryDataGas(session, targetOnly),
+      slips: getMyPayslipsDataGas(session, targetOnly) || [],
       attendanceLogs: getAttendanceLogsListDataGas(session, queryPayload) || [],
       attendances: getAttendancesListDataGas(session, queryPayload) || [],
-      disbursements: getDisbursementRequestsDataGas(session) || [],
-      reimbursements: getReimbursementsListDataGas(session) || [],
+      disbursements: getDisbursementRequestsDataGas(session, targetOnly) || [],
+      reimbursements: getReimbursementsListDataGas(session, targetOnly) || [],
       estimates: getDisbursementEstimatesDataGas(session, queryPayload) || [],
       notifications: getNotificationsDataGas(session),
       schoolProfile: getSchoolProfileDataGas(),
       versions: getSyncMetaGas(false).versions,
+      isTuOperator: ctx.isTuOperator,
+      isAssistingOther: ctx.isAssistingOther,
+      ownTeacherId: String(ctx.ownTeacher.id),
+      ownTeacherName: sanitizeString(ctx.ownTeacher.name || session.teacherName || ''),
+      activeTeacherId: String(ctx.targetTeacher.id),
+      assistableTeachers: ctx.isTuOperator ? buildAssistableTeachersListGas() : [],
     },
   });
 }
@@ -3400,8 +3618,11 @@ function buildTeacherEstimateSnapshotGas(teacher, monthVal, yearVal, cachedSheet
 }
 
 function getDisbursementEstimatesDataGas(session, payload) {
-  var ownTeacher = resolveOwnedTeacherRecord(session);
-  if (!ownTeacher) return null;
+  var ctx = resolveGuruTargetContextGas(session, payload);
+  if (!ctx.ok) {
+    return { _errorStatus: ctx.status || 403, _errorMessage: ctx.error };
+  }
+  var ownTeacher = ctx.targetTeacher;
 
   var sharedCache = {};
   var payrolls = readSheetRecords(SHEETS.PAYROLLS);
@@ -3456,19 +3677,28 @@ function getDisbursementEstimatesDataGas(session, payload) {
 function handleGetDisbursementEstimates(session, payload) {
   var snapshots = getDisbursementEstimatesDataGas(session, payload);
   if (snapshots === null) return forbiddenResponse();
+  if (snapshots && !Array.isArray(snapshots) && snapshots._errorStatus) {
+    return buildJsonResponse(snapshots._errorStatus, {
+      ok: false,
+      error: snapshots._errorMessage,
+    });
+  }
   return buildJsonResponse(200, { ok: true, data: snapshots });
 }
 
-function getDisbursementRequestsDataGas(session) {
+function getDisbursementRequestsDataGas(session, payload) {
   var allReqs = readSheetRecords(SHEETS.DISBURSEMENT_REQUESTS).sort(function (a, b) {
     return String(b.created_at || '').localeCompare(String(a.created_at || ''));
   });
 
   if (session.role === ROLES.GURU) {
-    var ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) return null;
+    var ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
+      return { _errorStatus: ctx.status || 403, _errorMessage: ctx.error };
+    }
+    var targetTeacher = ctx.targetTeacher;
     return allReqs.filter(function (r) {
-      return String(r.teacher_id) === String(ownTeacher.id);
+      return String(r.teacher_id) === String(targetTeacher.id);
     });
   }
 
@@ -3479,15 +3709,25 @@ function getDisbursementRequestsDataGas(session) {
   return null;
 }
 
-function handleListDisbursementRequests(session) {
-  var result = getDisbursementRequestsDataGas(session);
+function handleListDisbursementRequests(session, payload) {
+  var result = getDisbursementRequestsDataGas(session, payload);
   if (result === null) return forbiddenResponse();
+  if (result && !Array.isArray(result) && result._errorStatus) {
+    return buildJsonResponse(result._errorStatus, {
+      ok: false,
+      error: result._errorMessage,
+    });
+  }
   return buildJsonResponse(200, { ok: true, data: result });
 }
 
 function handleCreateDisbursementRequest(session, payload) {
-  var ownTeacher = resolveOwnedTeacherRecord(session);
-  if (!ownTeacher) return forbiddenResponse();
+  var ctx = resolveGuruTargetContextGas(session, payload);
+  if (!ctx.ok) {
+    return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+  }
+  var ownTeacher = ctx.targetTeacher;
+  var assistedByName = ctx.isAssistingOther ? ctx.assistedByName : '';
 
   var periodKey = normalizePeriodKey(payload.month);
   var year = Number(payload.year);
@@ -3545,6 +3785,7 @@ function handleCreateDisbursementRequest(session, payload) {
     requested_amount: requestedAmount,
     approved_amount: requestedAmount,
     reason: reason,
+    assisted_by_name: assistedByName,
     status: 'pending_treasurer',
     treasurer_note: '',
     kepsek_note: '',
@@ -3562,6 +3803,7 @@ function handleCreateDisbursementRequest(session, payload) {
   var scopeLabel = scope === 'full' ? 'Seluruh Estimasi Gaji' : 'Sebagian Estimasi Gaji';
   var timingLabel =
     timing === 'early' ? 'Sebelum Waktunya (Pencairan Awal)' : 'Tepat Waktu (Kolektif Bendahara)';
+  var tuAuditSuffix = ctx.isAssistingOther ? ' (Diinput oleh TU: ' + assistedByName + ')' : '';
 
   createNotificationRecordGas({
     recipient_role: ROLES.ADMIN,
@@ -3581,10 +3823,34 @@ function handleCreateDisbursementRequest(session, payload) {
       '/' +
       year +
       '.' +
-      (reason ? ' Catatan: ' + reason : ''),
+      (reason ? ' Catatan: ' + reason : '') +
+      tuAuditSuffix,
     type: 'disbursement_submitted',
     ref_id: newReq.id,
   });
+
+  if (ctx.isAssistingOther) {
+    createNotificationRecordGas({
+      recipient_role: ROLES.GURU,
+      recipient_teacher_id: String(ownTeacher.id),
+      recipient_email: '',
+      title: 'Pengajuan Pencairan Dibantu TU',
+      message:
+        'TU (' +
+        assistedByName +
+        ') mengajukan pencairan ' +
+        scopeLabel +
+        ' sebesar ' +
+        formatRupiahGas(requestedAmount) +
+        ' untuk periode ' +
+        storedMonth +
+        '/' +
+        year +
+        ' atas nama Anda.',
+      type: 'disbursement_submitted',
+      ref_id: newReq.id,
+    });
+  }
 
   var schoolName = getSchoolDisplayNameGas();
   var emailSent = sendNotificationEmailGas(
@@ -3595,6 +3861,7 @@ function handleCreateDisbursementRequest(session, payload) {
       ',\n\n' +
       'Terdapat pengajuan pencairan gaji PTK baru dengan rincian:\n' +
       '- Nama PTK      : ' + ownTeacher.name + ' (NIP: ' + ownTeacher.nip + ')\n' +
+      (ctx.isAssistingOther ? '- Diinput Oleh  : TU (' + assistedByName + ')\n' : '') +
       '- Periode       : ' + storedMonth + '/' + year + '\n' +
       '- Cakupan       : ' + scopeLabel + '\n' +
       '- Jadwal        : ' + timingLabel + '\n' +
@@ -3607,6 +3874,7 @@ function handleCreateDisbursementRequest(session, payload) {
       '<p style="margin:0 0 14px;color:#475569;font-size:13px;">' + schoolName + '</p>' +
       '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:16px;">' +
       '<tr><td style="padding:6px 0;color:#64748b;">Nama PTK</td><td style="padding:6px 0;font-weight:700;color:#0f172a;">' + ownTeacher.name + ' (' + ownTeacher.nip + ')</td></tr>' +
+      (ctx.isAssistingOther ? '<tr><td style="padding:6px 0;color:#64748b;">Diinput Oleh</td><td style="padding:6px 0;font-weight:700;color:#1d4ed8;">TU (' + assistedByName + ')</td></tr>' : '') +
       '<tr><td style="padding:6px 0;color:#64748b;">Periode Gaji</td><td style="padding:6px 0;font-weight:700;color:#0f172a;">' + storedMonth + '/' + year + '</td></tr>' +
       '<tr><td style="padding:6px 0;color:#64748b;">Cakupan</td><td style="padding:6px 0;color:#0f172a;">' + scopeLabel + '</td></tr>' +
       '<tr><td style="padding:6px 0;color:#64748b;">Jadwal Pencairan</td><td style="padding:6px 0;color:#0f172a;">' + timingLabel + '</td></tr>' +
@@ -4351,7 +4619,7 @@ function handleGetSyncVersions() {
  * 4D. CATATAN BELANJA KEPERLUAN SEKOLAH / REIMBURSEMENT PTK (v22)
  * ========================================================================== */
 
-function getReimbursementsListDataGas(session) {
+function getReimbursementsListDataGas(session, payload) {
   var allItems = readSheetRecords(SHEETS.REIMBURSEMENTS)
     .map(function (r) {
       return Object.assign({}, r, {
@@ -4368,6 +4636,7 @@ function getReimbursementsListDataGas(session) {
               : r.amount || 0
           )
         ),
+        assisted_by_name: sanitizeString(r.assisted_by_name || ''),
       });
     })
     .sort(function (a, b) {
@@ -4375,10 +4644,13 @@ function getReimbursementsListDataGas(session) {
     });
 
   if (session.role === ROLES.GURU) {
-    var ownTeacher = resolveOwnedTeacherRecord(session);
-    if (!ownTeacher) return null;
+    var ctx = resolveGuruTargetContextGas(session, payload);
+    if (!ctx.ok) {
+      return { _errorStatus: ctx.status || 403, _errorMessage: ctx.error };
+    }
+    var targetTeacher = ctx.targetTeacher;
     return allItems.filter(function (r) {
-      return String(r.teacher_id) === String(ownTeacher.id);
+      return String(r.teacher_id) === String(targetTeacher.id);
     });
   }
 
@@ -4389,16 +4661,27 @@ function getReimbursementsListDataGas(session) {
   return null;
 }
 
-function handleListReimbursements(session) {
-  var result = getReimbursementsListDataGas(session);
+function handleListReimbursements(session, payload) {
+  var result = getReimbursementsListDataGas(session, payload);
   if (result === null) return forbiddenResponse();
+  if (result && !Array.isArray(result) && result._errorStatus) {
+    return buildJsonResponse(result._errorStatus, {
+      ok: false,
+      error: result._errorMessage,
+    });
+  }
   return buildJsonResponse(200, { ok: true, data: result });
 }
 
 function handleCreateReimbursement(session, payload) {
   var isAdminRoutine = session.role === ROLES.ADMIN;
-  var ownTeacher = isAdminRoutine ? null : resolveOwnedTeacherRecord(session);
+  var ctx = isAdminRoutine ? null : resolveGuruTargetContextGas(session, payload);
+  if (ctx && !ctx.ok) {
+    return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+  }
+  var ownTeacher = ctx ? ctx.targetTeacher : null;
   if (!isAdminRoutine && !ownTeacher) return forbiddenResponse();
+  var assistedByName = !isAdminRoutine && ctx && ctx.isAssistingOther ? ctx.assistedByName : '';
 
   var expenseDate = sanitizeString(payload.expense_date || '');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(expenseDate)) {
@@ -4464,6 +4747,7 @@ function handleCreateReimbursement(session, payload) {
     updated_at: nowIso,
     treasurer_reviewed_at: isAdminRoutine ? nowIso : '',
     kepsek_reviewed_at: '',
+    assisted_by_name: assistedByName,
   };
 
   appendSheetRecord(SHEETS.REIMBURSEMENTS, newItem);
@@ -4519,6 +4803,8 @@ function handleCreateReimbursement(session, payload) {
   }
 
   var adminEmails = getRoleEmailListGas(ROLES.ADMIN);
+  var tuAuditSuffix =
+    ctx && ctx.isAssistingOther ? ' (Diinput oleh TU: ' + assistedByName + ')' : '';
   createNotificationRecordGas({
     recipient_role: ROLES.ADMIN,
     recipient_teacher_id: '',
@@ -4534,10 +4820,34 @@ function handleCreateReimbursement(session, payload) {
       storedMonth +
       '/' +
       year +
-      '.',
+      '.' +
+      tuAuditSuffix,
     type: 'reimbursement_submitted',
     ref_id: newItem.id,
   });
+
+  if (ctx && ctx.isAssistingOther) {
+    createNotificationRecordGas({
+      recipient_role: ROLES.GURU,
+      recipient_teacher_id: String(ownTeacher.id),
+      recipient_email: '',
+      title: 'Belanja Sekolah Dicatat oleh TU',
+      message:
+        'TU (' +
+        assistedByName +
+        ') mencatat belanja sekolah "' +
+        title +
+        '" sebesar ' +
+        formatRupiahGas(amount) +
+        ' untuk slip periode ' +
+        storedMonth +
+        '/' +
+        year +
+        ' atas nama Anda.',
+      type: 'reimbursement_submitted',
+      ref_id: newItem.id,
+    });
+  }
 
   var emailSent = sendNotificationEmailGas(
     adminEmails,
@@ -4549,6 +4859,7 @@ function handleCreateReimbursement(session, payload) {
       ' (' +
       ownTeacher.nip +
       ') mencatat pengeluaran belanja keperluan sekolah yang perlu diverifikasi:\n' +
+      (ctx && ctx.isAssistingOther ? '- Diinput Oleh    : TU (' + assistedByName + ')\n' : '') +
       '- Tanggal Belanja : ' + expenseDate + '\n' +
       '- Uraian          : ' + title + '\n' +
       '- Nominal         : ' + formatRupiahGas(amount) + '\n' +
@@ -4570,8 +4881,13 @@ function handleCreateReimbursement(session, payload) {
 
 function handleUpdateReimbursement(session, payload) {
   var isAdminRoutine = session.role === ROLES.ADMIN;
-  var ownTeacher = isAdminRoutine ? null : resolveOwnedTeacherRecord(session);
+  var ctx = isAdminRoutine ? null : resolveGuruTargetContextGas(session, payload);
+  if (ctx && !ctx.ok) {
+    return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+  }
+  var ownTeacher = ctx ? ctx.targetTeacher : null;
   if (!isAdminRoutine && !ownTeacher) return forbiddenResponse();
+  var assistedByName = !isAdminRoutine && ctx && ctx.isAssistingOther ? ctx.assistedByName : '';
 
   var targetId = sanitizeString(payload.id);
   if (!targetId) return notFoundResponse();
@@ -4652,6 +4968,7 @@ function handleUpdateReimbursement(session, payload) {
       amount: amount,
       approved_amount: amount,
       updated_at: nowIso,
+      assisted_by_name: isAdminRoutine ? sanitizeString(row.assisted_by_name || '') : assistedByName,
     });
   });
 
@@ -4664,7 +4981,11 @@ function handleUpdateReimbursement(session, payload) {
 
 function handleDeleteReimbursement(session, payload) {
   var isAdminRoutine = session.role === ROLES.ADMIN;
-  var ownTeacher = isAdminRoutine ? null : resolveOwnedTeacherRecord(session);
+  var ctx = isAdminRoutine ? null : resolveGuruTargetContextGas(session, payload);
+  if (ctx && !ctx.ok) {
+    return buildJsonResponse(ctx.status || 403, { ok: false, error: ctx.error });
+  }
+  var ownTeacher = ctx ? ctx.targetTeacher : null;
   if (!isAdminRoutine && !ownTeacher) return forbiddenResponse();
 
   var targetId = sanitizeString(payload.id);

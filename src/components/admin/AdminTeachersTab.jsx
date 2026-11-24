@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Edit3, FileDown, Mail, Plus, Search, Trash2, Upload } from 'lucide-react';
+import { Edit3, FileDown, Mail, Plus, Search, Trash2, Upload, UserCog } from 'lucide-react';
 import {
   formatRupiah,
   getStaffCategoryLabel,
@@ -14,11 +14,13 @@ const TeacherMasterCard = React.memo(function TeacherMasterCard({
   teacher,
   onEdit,
   onDelete,
+  onToggleTuOperator,
 }) {
   const comp = teacher.salary_component || {};
   const catId = resolveStaffCategory(teacher);
   const catLabel = getStaffCategoryLabel(catId);
   const infaqEnabled = isInfaqZakatEnabled(comp);
+  const isTuOperator = Boolean(teacher.is_tu_operator);
   const customComponents = useMemo(
     () => parseCustomComponents(comp.custom_components_json),
     [comp.custom_components_json]
@@ -37,6 +39,12 @@ const TeacherMasterCard = React.memo(function TeacherMasterCard({
               >
                 {catLabel}
               </span>
+              {isTuOperator && (
+                <span className="nim-badge nim-badge--accent !text-[10.5px]">
+                  <UserCog className="h-3 w-3" />
+                  <span>TU Pendamping PTK</span>
+                </span>
+              )}
             </div>
             <h3 className="text-base font-bold text-[var(--ink)]">{teacher.name}</h3>
             <p className="text-xs text-[var(--muted)]">
@@ -104,9 +112,33 @@ const TeacherMasterCard = React.memo(function TeacherMasterCard({
       </div>
 
       <div
-        className="flex items-center justify-end gap-2 pt-3"
+        className="flex flex-wrap items-center justify-end gap-2 pt-3"
         style={{ borderTop: '1px solid var(--line)' }}
       >
+        {onToggleTuOperator && (
+          <button
+            type="button"
+            onClick={() => onToggleTuOperator(teacher)}
+            title={
+              isTuOperator
+                ? 'Cabut mandat TU Pendamping PTK'
+                : 'Tunjuk sebagai TU Pendamping PTK (akses bantu seluruh guru)'
+            }
+            className="nim-btn nim-btn--sm"
+            style={
+              isTuOperator
+                ? {
+                    background: 'var(--warn-soft)',
+                    color: 'var(--warn-text)',
+                    boxShadow: 'inset 0 0 0 1px var(--warn-line)',
+                  }
+                : undefined
+            }
+          >
+            <UserCog className="h-3.5 w-3.5" />
+            <span>{isTuOperator ? 'Cabut TU' : 'Tunjuk TU'}</span>
+          </button>
+        )}
         <button
           type="button"
           onClick={() => onEdit(teacher)}
@@ -134,6 +166,7 @@ export const AdminTeachersTab = React.memo(function AdminTeachersTab({
   onOpenAddModal,
   onOpenEditModal,
   onRequestDelete,
+  onToggleTuOperator,
 }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -141,6 +174,11 @@ export const AdminTeachersTab = React.memo(function AdminTeachersTab({
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(12);
   const [downloadingTpl, setDownloadingTpl] = useState(false);
+
+  const tuOperatorCount = useMemo(
+    () => teachers.filter((t) => Boolean(t.is_tu_operator)).length,
+    [teachers]
+  );
 
   useEffect(() => {
     setPage(1);
@@ -154,6 +192,7 @@ export const AdminTeachersTab = React.memo(function AdminTeachersTab({
       }
       if (portalFilter === 'has_email' && !t.email) return false;
       if (portalFilter === 'no_email' && Boolean(t.email)) return false;
+      if (portalFilter === 'tu_operator' && !t.is_tu_operator) return false;
       if (!q) return true;
       const hay = `${t.name || ''} ${t.nip || ''} ${t.status || ''} ${t.bank_account || ''} ${
         t.email || ''
@@ -276,6 +315,9 @@ export const AdminTeachersTab = React.memo(function AdminTeachersTab({
               <option value="all">Semua Akses Portal</option>
               <option value="has_email">Punya Gmail Portal</option>
               <option value="no_email">Belum Ada Gmail</option>
+              <option value="tu_operator">
+                TU Pendamping PTK ({tuOperatorCount})
+              </option>
             </select>
           </div>
         </div>
@@ -296,6 +338,7 @@ export const AdminTeachersTab = React.memo(function AdminTeachersTab({
                 teacher={t}
                 onEdit={onOpenEditModal}
                 onDelete={onRequestDelete}
+                onToggleTuOperator={onToggleTuOperator}
               />
             ))}
           </div>

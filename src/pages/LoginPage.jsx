@@ -49,6 +49,12 @@ const DEFAULT_DEMO_ACCOUNTS = [
     roleLabel: 'Pendidik / Guru',
     tone: 'nim-badge--info',
   },
+  {
+    email: 'rizky.pratama@gmail.com',
+    name: 'Rizky Pratama, S.Kom.',
+    roleLabel: 'TU Pendamping PTK',
+    tone: 'nim-badge--accent',
+  },
 ];
 
 function getRememberedGoogleAccounts() {
@@ -185,7 +191,9 @@ export function LoginPage({ onLoginSuccess }) {
             ? 'Admin / Bendahara'
             : result?.user?.role === 'kepsek'
               ? 'Kepala Sekolah'
-              : 'Pendidik / Guru',
+              : result?.user?.isTuOperator
+                ? 'TU Pendamping PTK'
+                : 'Pendidik / Guru',
       });
       setRememberedAccounts(getRememberedGoogleAccounts());
       saveSession(result);

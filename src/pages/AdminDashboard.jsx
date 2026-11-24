@@ -109,6 +109,7 @@ const INITIAL_TEACHER_FORM = {
   status: 'GTY (Guru Tetap Yayasan)',
   bank_account: '',
   email: '',
+  is_tu_operator: false,
   base_salary: 3000000,
   hourly_rate: 50000,
   position_allowance: 500000,
@@ -468,6 +469,7 @@ export function AdminDashboard({
           ? String(teacher.bank_account)
           : '',
       email: teacher.email !== undefined && teacher.email !== null ? String(teacher.email) : '',
+      is_tu_operator: Boolean(teacher.is_tu_operator),
       base_salary: Number(comp.base_salary || 0),
       hourly_rate: Number(comp.hourly_rate || 0),
       position_allowance: Number(comp.position_allowance || 0),
@@ -603,6 +605,7 @@ export function AdminDashboard({
       staff_category: resolveStaffCategory(teacherForm),
       email: cleanEmail,
       username: cleanEmail,
+      is_tu_operator: Boolean(teacherForm.is_tu_operator),
       infaq_zakat_enabled: isInfaqEnabled,
       bpjs_deduction: isInfaqEnabled ? 1 : 0,
       custom_components: cleanCustomList,
@@ -644,6 +647,29 @@ export function AdminDashboard({
           }
         },
       });
+    },
+    [refreshDomains]
+  );
+
+  const handleToggleTuOperator = useCallback(
+    async (teacher) => {
+      if (!teacher || !teacher.id) return;
+      const nextVal = !teacher.is_tu_operator;
+      try {
+        await api.put('teachers.update', {
+          id: teacher.id,
+          is_tu_operator: nextVal,
+        });
+        notify.success(
+          nextVal
+            ? `"${teacher.name}" ditunjuk sebagai TU Pendamping PTK.`
+            : `Mandat TU Pendamping PTK untuk "${teacher.name}" dicabut.`
+        );
+        emitDataChange(['teachers'], { source: 'admin_local' });
+        refreshDomains(['teachers'], { silent: true });
+      } catch (err) {
+        notify.error(err.message || 'Gagal memperbarui status TU Pendamping PTK.');
+      }
     },
     [refreshDomains]
   );
@@ -1297,6 +1323,7 @@ export function AdminDashboard({
                 onOpenAddModal={openAddTeacherModal}
                 onOpenEditModal={openEditTeacherModal}
                 onRequestDelete={requestDeleteTeacher}
+                onToggleTuOperator={handleToggleTuOperator}
               />
             )}
 

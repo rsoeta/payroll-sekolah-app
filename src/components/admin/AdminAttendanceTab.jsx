@@ -239,6 +239,11 @@ const AttendanceTeacherCard = React.memo(function AttendanceTeacherCard({
                           <span className={`${vMeta.badgeCls} !text-[9.5px]`}>
                             {vMeta.shortLabel}
                           </span>
+                          {lg.assisted_by_name && (
+                            <span className="nim-badge nim-badge--accent !text-[9.5px]">
+                              Diinput oleh TU: {lg.assisted_by_name}
+                            </span>
+                          )}
                         </div>
                         {lg.note && (
                           <span className="block text-[10.5px] text-slate-500">

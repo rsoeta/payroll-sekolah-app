@@ -90,7 +90,9 @@ export function ReimbursementApprovalPanel({
       const catLabel = getReimbursementCategoryMeta(it.category).label;
       const hay = `${it.teacher_name || ''} ${it.nip || ''} ${it.title || ''} ${
         it.receipt_number || ''
-      } ${catLabel} ${getMonthName(it.month)} ${it.year}`.toLowerCase();
+      } ${it.assisted_by_name || ''} ${catLabel} ${getMonthName(it.month)} ${
+        it.year
+      }`.toLowerCase();
       return hay.includes(q);
     });
   }, [items, statusFilter, monthFilter, yearFilter, searchQuery]);
@@ -412,6 +414,11 @@ export function ReimbursementApprovalPanel({
                             {isRoutine ? 'Periode' : 'Slip'}: {getMonthName(item.month)} {item.year}
                           </span>
                           <span className="nim-badge !text-[10.5px]">{catMeta.label}</span>
+                          {item.assisted_by_name && (
+                            <span className="nim-badge nim-badge--accent !text-[10.5px]">
+                              Diinput oleh TU: {item.assisted_by_name}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <span className={stMeta.cls}>{stMeta.shortLabel}</span>

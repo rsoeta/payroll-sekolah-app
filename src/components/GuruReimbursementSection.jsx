@@ -41,6 +41,8 @@ import ReceiptLightboxModal from './ReceiptLightboxModal';
 
 export function GuruReimbursementSection({
   teacherProfile,
+  targetTeacherId = '',
+  assistingMeta = null,
   initialPeriod,
   initialItems,
   onReimbursementsChange,
@@ -76,22 +78,26 @@ export function GuruReimbursementSection({
 
   const skipInitialFetchRef = useRef(hasPrefetch);
 
-  const loadData = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true);
-    try {
-      const list = await api.get('reimbursements.list');
-      const validList = Array.isArray(list) ? list : [];
-      setItems(validList);
-      return validList;
-    } catch (err) {
-      if (!silent) {
-        notify.error(err.message || 'Gagal memuat catatan belanja sekolah.');
+  const loadData = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!silent) setLoading(true);
+      try {
+        const targetParam = targetTeacherId ? { target_teacher_id: targetTeacherId } : {};
+        const list = await api.get('reimbursements.list', targetParam);
+        const validList = Array.isArray(list) ? list : [];
+        setItems(validList);
+        return validList;
+      } catch (err) {
+        if (!silent) {
+          notify.error(err.message || 'Gagal memuat catatan belanja sekolah.');
+        }
+        return null;
+      } finally {
+        if (!silent) setLoading(false);
       }
-      return null;
-    } finally {
-      if (!silent) setLoading(false);
-    }
-  }, []);
+    },
+    [targetTeacherId]
+  );
 
   useEffect(() => {
     if (skipInitialFetchRef.current) {
@@ -194,6 +200,7 @@ export function GuruReimbursementSection({
         receipt_number: String(receiptNumber || '').trim(),
         receipt_url: cleanUrl,
         note: String(note || '').trim(),
+        ...(targetTeacherId ? { target_teacher_id: targetTeacherId } : {}),
       };
 
       if (editingId) {
@@ -227,7 +234,10 @@ export function GuruReimbursementSection({
     const target = deleteTarget;
     setDeleteTarget(null);
     try {
-      await api.delete('reimbursements.delete', { id: target.id });
+      await api.delete('reimbursements.delete', {
+        id: target.id,
+        ...(targetTeacherId ? { target_teacher_id: targetTeacherId } : {}),
+      });
       if (editingId === target.id) resetForm();
       notify.success('Catatan belanja berhasil dihapus.');
       const updated = await loadData({ silent: true });
@@ -367,6 +377,11 @@ export function GuruReimbursementSection({
                 <h2 className="text-base font-bold text-[var(--ink)]">
                   {editingId ? 'Ubah Catatan Belanja Sekolah' : 'Catat Belanja Sekolah'}
                 </h2>
+                {assistingMeta?.isAssistingOther && (
+                  <span className="nim-badge nim-badge--warn mt-1">
+                    Mencatat atas nama: {assistingMeta.targetTeacherName}
+                  </span>
+                )}
                 <p className="text-xs text-[var(--muted)]">
                   Pengeluaran keperluan sekolah yang Anda talangi akan menjadi piutang sekolah di
                   slip gaji tanpa potongan Infaq 2,5%.
@@ -670,6 +685,11 @@ export function GuruReimbursementSection({
                             Slip: {getMonthName(item.month)} {item.year}
                           </span>
                           <span className="nim-badge !text-[10px]">{catMeta.label}</span>
+                          {item.assisted_by_name && (
+                            <span className="nim-badge nim-badge--accent !text-[10px]">
+                              Diinput oleh TU: {item.assisted_by_name}
+                            </span>
+                          )}
                         </div>
                       </div>
                       <span className={stMeta.cls}>{stMeta.shortLabel}</span>
