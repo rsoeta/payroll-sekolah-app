@@ -16,6 +16,7 @@ import ConfirmModal from '../ConfirmModal';
 
 export const DataArchiveSection = React.memo(function DataArchiveSection({
   onMaintenanceComplete,
+  refreshSignal = 0,
 }) {
   const [statusData, setStatusData] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -48,7 +49,7 @@ export const DataArchiveSection = React.memo(function DataArchiveSection({
 
   useEffect(() => {
     loadArchiveStatus();
-  }, [loadArchiveStatus]);
+  }, [loadArchiveStatus, refreshSignal]);
 
   const requestArchiveYear = (yearRow) => {
     setConfirmState({

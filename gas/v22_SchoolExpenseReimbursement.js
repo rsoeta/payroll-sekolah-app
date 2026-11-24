@@ -506,6 +506,18 @@ function routeAuthenticatedRequest(method, action, payload, session) {
         if (method !== 'POST' || session.role !== ROLES.ADMIN) return forbiddenResponse();
         return handlePruneNotifications(payload);
 
+      case 'maintenance.exportBackup':
+        if (method !== 'GET' || session.role !== ROLES.ADMIN) return forbiddenResponse();
+        return handleExportBackup(session);
+
+      case 'maintenance.restoreBackup':
+        if (method !== 'POST' || session.role !== ROLES.ADMIN) return forbiddenResponse();
+        return handleRestoreBackup(session, payload);
+
+      case 'maintenance.resetData':
+        if (method !== 'POST' || session.role !== ROLES.ADMIN) return forbiddenResponse();
+        return handleResetData(session, payload);
+
       default:
         return notFoundResponse();
     }
@@ -5922,6 +5934,610 @@ function handlePruneNotifications(payload) {
       removedCount: removedCount,
       remainingCount: kept.length,
       olderThanDays: days,
+    },
+  });
+}
+
+/* ==========================================================================
+ * 4E. BACKUP (.JSON / .XLSX DATA), CHECKSUM RESTORE & SAFE RESET (v23)
+ * ========================================================================== */
+
+function cleanBackupStrGas(v) {
+  if (v === null || v === undefined) return '';
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    return v.toISOString();
+  }
+  return sanitizeString(v);
+}
+
+function cleanBackupIntGas(v) {
+  var n = Number(v);
+  return isNaN(n) || !isFinite(n) ? 0 : Math.round(n);
+}
+
+function cleanBackupDecGas(v) {
+  var n = Number(v);
+  return isNaN(n) || !isFinite(n) ? 0 : Math.round(n * 100) / 100;
+}
+
+function cleanBackupBoolGas(v) {
+  if (v === true || v === 1) return true;
+  var s = String(v || '').trim().toLowerCase();
+  return s === 'true' || s === '1' || s === 'ya';
+}
+
+function cleanBackupIsoDateGas(v) {
+  if (v instanceof Date && !isNaN(v.getTime())) {
+    return normalizeDateStringGas(v);
+  }
+  var s = cleanBackupStrGas(v).replace(/^'+/, '').trim();
+  if (!s) return '';
+  var m = s.match(/^(\d{4}-\d{2}-\d{2})/);
+  return m ? m[1] : s;
+}
+
+function cleanBackupMonthGas(v) {
+  var norm = normalizePeriodKey(v);
+  if (!norm) return '';
+  return /^\d+$/.test(norm) ? Number(norm) : norm;
+}
+
+function normalizeBackupDataGas(raw) {
+  var src = raw && typeof raw === 'object' ? raw : {};
+  var prof =
+    src.school_profile && typeof src.school_profile === 'object' ? src.school_profile : null;
+
+  return {
+    school_profile: prof
+      ? {
+          app_short_name: cleanBackupStrGas(prof.app_short_name || 'SIPAYROLL') || 'SIPAYROLL',
+          foundation_name: cleanBackupStrGas(prof.foundation_name || ''),
+          school_name: cleanBackupStrGas(prof.school_name || ''),
+          address: cleanBackupStrGas(prof.address || ''),
+          contact_info: cleanBackupStrGas(prof.contact_info || ''),
+          city: cleanBackupStrGas(prof.city || 'Bandung') || 'Bandung',
+          principal_name: cleanBackupStrGas(prof.principal_name || ''),
+          principal_nip: cleanBackupStrGas(prof.principal_nip || ''),
+          treasurer_name: cleanBackupStrGas(prof.treasurer_name || ''),
+          treasurer_nip: cleanBackupStrGas(prof.treasurer_nip || ''),
+          slip_footer_note: cleanBackupStrGas(prof.slip_footer_note || ''),
+          logo_data_url: String(prof.logo_data_url || '/logo.png').trim(),
+          google_client_id: cleanBackupStrGas(prof.google_client_id || ''),
+        }
+      : null,
+    users: (Array.isArray(src.users) ? src.users : []).map(function (u) {
+      var email = cleanBackupStrGas((u && (u.email || u.username)) || '').toLowerCase();
+      return {
+        id: cleanBackupStrGas((u && u.id) || ''),
+        username: cleanBackupStrGas((u && u.username) || email).toLowerCase(),
+        email: email,
+        role: cleanBackupStrGas((u && u.role) || 'guru').toLowerCase() || 'guru',
+      };
+    }),
+    teachers: (Array.isArray(src.teachers) ? src.teachers : []).map(function (t) {
+      return {
+        id: cleanBackupStrGas((t && t.id) || ''),
+        user_id: cleanBackupStrGas((t && t.user_id) || ''),
+        nip: cleanBackupStrGas((t && t.nip) || ''),
+        name: cleanBackupStrGas((t && t.name) || ''),
+        staff_category: cleanBackupStrGas((t && t.staff_category) || ''),
+        status: cleanBackupStrGas((t && t.status) || ''),
+        bank_account: cleanBackupStrGas((t && t.bank_account) || ''),
+        email: cleanBackupStrGas((t && t.email) || '').toLowerCase(),
+        is_tu_operator: cleanBackupBoolGas(t && t.is_tu_operator),
+      };
+    }),
+    salary_components: (Array.isArray(src.salary_components) ? src.salary_components : []).map(
+      function (c) {
+        return {
+          id: cleanBackupStrGas((c && c.id) || ''),
+          teacher_id: cleanBackupStrGas((c && c.teacher_id) || ''),
+          base_salary: Math.max(0, cleanBackupIntGas(c && c.base_salary)),
+          hourly_rate: Math.max(0, cleanBackupIntGas(c && c.hourly_rate)),
+          position_allowance: Math.max(0, cleanBackupIntGas(c && c.position_allowance)),
+          bpjs_deduction:
+            cleanBackupBoolGas(c && c.infaq_zakat_enabled) || Number((c && c.bpjs_deduction) || 0) > 0
+              ? 1
+              : 0,
+          custom_components_json:
+            cleanBackupStrGas((c && c.custom_components_json) || '[]') || '[]',
+        };
+      }
+    ),
+    attendances: (Array.isArray(src.attendances) ? src.attendances : []).map(function (a) {
+      return {
+        id: cleanBackupStrGas((a && a.id) || ''),
+        teacher_id: cleanBackupStrGas((a && a.teacher_id) || ''),
+        month: cleanBackupMonthGas(a && a.month),
+        year: cleanBackupIntGas(a && a.year),
+        present_days: Math.max(0, cleanBackupDecGas(a && a.present_days)),
+        absent_days: Math.max(0, cleanBackupDecGas(a && a.absent_days)),
+        total_jtm: Math.max(0, cleanBackupDecGas(a && a.total_jtm)),
+      };
+    }),
+    attendance_logs: (Array.isArray(src.attendance_logs) ? src.attendance_logs : []).map(function (
+      l
+    ) {
+      return {
+        id: cleanBackupStrGas((l && l.id) || ''),
+        teacher_id: cleanBackupStrGas((l && l.teacher_id) || ''),
+        date: cleanBackupIsoDateGas(l && l.date),
+        month: cleanBackupIntGas(l && l.month),
+        year: cleanBackupIntGas(l && l.year),
+        status: cleanBackupStrGas((l && l.status) || 'hadir').toLowerCase() || 'hadir',
+        jtm_hours: Math.max(0, cleanBackupDecGas(l && l.jtm_hours)),
+        note: cleanBackupStrGas((l && l.note) || ''),
+        created_at: cleanBackupStrGas((l && l.created_at) || ''),
+        updated_at: cleanBackupStrGas((l && l.updated_at) || ''),
+        class_name: cleanBackupStrGas((l && l.class_name) || 'Kelas Umum') || 'Kelas Umum',
+        validation_status:
+          cleanBackupStrGas((l && l.validation_status) || 'pending').toLowerCase() || 'pending',
+        validation_note: cleanBackupStrGas((l && l.validation_note) || ''),
+        assisted_by_name: cleanBackupStrGas((l && l.assisted_by_name) || ''),
+      };
+    }),
+    payrolls: (Array.isArray(src.payrolls) ? src.payrolls : []).map(function (p) {
+      return {
+        id: cleanBackupStrGas((p && p.id) || ''),
+        month: cleanBackupMonthGas(p && p.month),
+        year: cleanBackupIntGas(p && p.year),
+        total_budget: Math.max(0, cleanBackupIntGas(p && p.total_budget)),
+        status: cleanBackupStrGas((p && p.status) || 'draft').toLowerCase() || 'draft',
+      };
+    }),
+    payroll_details: (Array.isArray(src.payroll_details) ? src.payroll_details : []).map(function (
+      d
+    ) {
+      return {
+        id: cleanBackupStrGas((d && d.id) || ''),
+        payroll_id: cleanBackupStrGas((d && d.payroll_id) || ''),
+        teacher_id: cleanBackupStrGas((d && d.teacher_id) || ''),
+        net_salary: Math.max(0, cleanBackupIntGas(d && d.net_salary)),
+        details_json: cleanBackupStrGas((d && d.details_json) || '{}') || '{}',
+      };
+    }),
+    disbursements: (Array.isArray(src.disbursements) ? src.disbursements : []).map(function (r) {
+      return {
+        id: cleanBackupStrGas((r && r.id) || ''),
+        teacher_id: cleanBackupStrGas((r && r.teacher_id) || ''),
+        teacher_name: cleanBackupStrGas((r && r.teacher_name) || ''),
+        nip: cleanBackupStrGas((r && r.nip) || ''),
+        month: cleanBackupMonthGas(r && r.month),
+        year: cleanBackupIntGas(r && r.year),
+        payroll_id: cleanBackupStrGas((r && r.payroll_id) || ''),
+        payroll_detail_id: cleanBackupStrGas((r && r.payroll_detail_id) || ''),
+        estimated_net_salary: Math.max(0, cleanBackupIntGas(r && r.estimated_net_salary)),
+        request_scope: cleanBackupStrGas((r && r.request_scope) || 'partial'),
+        disbursement_timing: cleanBackupStrGas((r && r.disbursement_timing) || 'early'),
+        requested_amount: Math.max(0, cleanBackupIntGas(r && r.requested_amount)),
+        approved_amount: Math.max(0, cleanBackupIntGas(r && r.approved_amount)),
+        reason: cleanBackupStrGas((r && r.reason) || ''),
+        status: cleanBackupStrGas((r && r.status) || 'pending_treasurer'),
+        treasurer_note: cleanBackupStrGas((r && r.treasurer_note) || ''),
+        kepsek_note: cleanBackupStrGas((r && r.kepsek_note) || ''),
+        issued_slip_id: cleanBackupStrGas((r && r.issued_slip_id) || ''),
+        issued_slip_json: cleanBackupStrGas((r && r.issued_slip_json) || '{}') || '{}',
+        created_at: cleanBackupStrGas((r && r.created_at) || ''),
+        treasurer_reviewed_at: cleanBackupStrGas((r && r.treasurer_reviewed_at) || ''),
+        kepsek_reviewed_at: cleanBackupStrGas((r && r.kepsek_reviewed_at) || ''),
+        slip_issued_at: cleanBackupStrGas((r && r.slip_issued_at) || ''),
+        assisted_by_name: cleanBackupStrGas((r && r.assisted_by_name) || ''),
+      };
+    }),
+    reimbursements: (Array.isArray(src.reimbursements) ? src.reimbursements : []).map(function (r) {
+      var appAmt =
+        r && r.approved_amount !== '' && r.approved_amount !== undefined && r.approved_amount !== null
+          ? r.approved_amount
+          : r
+          ? r.amount
+          : 0;
+      return {
+        id: cleanBackupStrGas((r && r.id) || ''),
+        teacher_id: cleanBackupStrGas((r && r.teacher_id) || ''),
+        teacher_name: cleanBackupStrGas((r && r.teacher_name) || ''),
+        nip: cleanBackupStrGas((r && r.nip) || ''),
+        expense_date: cleanBackupIsoDateGas(r && r.expense_date),
+        month: cleanBackupMonthGas(r && r.month),
+        year: cleanBackupIntGas(r && r.year),
+        category: cleanBackupStrGas((r && r.category) || 'lainnya'),
+        title: cleanBackupStrGas((r && r.title) || ''),
+        receipt_number: cleanBackupStrGas((r && r.receipt_number) || ''),
+        receipt_url: cleanBackupStrGas((r && r.receipt_url) || ''),
+        note: cleanBackupStrGas((r && r.note) || ''),
+        amount: Math.max(0, cleanBackupIntGas(r && r.amount)),
+        approved_amount: Math.max(0, cleanBackupIntGas(appAmt)),
+        status: cleanBackupStrGas((r && r.status) || 'pending_treasurer'),
+        treasurer_note: cleanBackupStrGas((r && r.treasurer_note) || ''),
+        kepsek_note: cleanBackupStrGas((r && r.kepsek_note) || ''),
+        created_at: cleanBackupStrGas((r && r.created_at) || ''),
+        updated_at: cleanBackupStrGas((r && r.updated_at) || ''),
+        treasurer_reviewed_at: cleanBackupStrGas((r && r.treasurer_reviewed_at) || ''),
+        kepsek_reviewed_at: cleanBackupStrGas((r && r.kepsek_reviewed_at) || ''),
+        assisted_by_name: cleanBackupStrGas((r && r.assisted_by_name) || ''),
+      };
+    }),
+    notifications: (Array.isArray(src.notifications) ? src.notifications : []).map(function (n) {
+      return {
+        id: cleanBackupStrGas((n && n.id) || ''),
+        recipient_role: cleanBackupStrGas((n && n.recipient_role) || 'admin'),
+        recipient_teacher_id: cleanBackupStrGas((n && n.recipient_teacher_id) || ''),
+        recipient_email: cleanBackupStrGas((n && n.recipient_email) || ''),
+        title: cleanBackupStrGas((n && n.title) || ''),
+        message: cleanBackupStrGas((n && n.message) || ''),
+        type: cleanBackupStrGas((n && n.type) || 'info'),
+        ref_id: cleanBackupStrGas((n && n.ref_id) || ''),
+        is_read: cleanBackupBoolGas(n && n.is_read),
+        created_at: cleanBackupStrGas((n && n.created_at) || ''),
+      };
+    }),
+  };
+}
+
+function getBackupCountsGas(norm) {
+  return {
+    users: (norm.users || []).length,
+    teachers: (norm.teachers || []).length,
+    salary_components: (norm.salary_components || []).length,
+    attendances: (norm.attendances || []).length,
+    attendance_logs: (norm.attendance_logs || []).length,
+    payrolls: (norm.payrolls || []).length,
+    payroll_details: (norm.payroll_details || []).length,
+    disbursements: (norm.disbursements || []).length,
+    reimbursements: (norm.reimbursements || []).length,
+    notifications: (norm.notifications || []).length,
+  };
+}
+
+function clearSyncDraftStateAndBumpAllGas() {
+  var meta = getSyncMetaGas(true);
+  meta.attendance_period_versions = {};
+  meta.disbursement_period_versions = {};
+  meta.reimbursement_period_versions = {};
+  meta.draft_snapshots = {};
+  [
+    'teachers',
+    'attendances',
+    'payrolls',
+    'disbursements',
+    'reimbursements',
+    'notifications',
+    'school_profile',
+  ].forEach(function (d) {
+    meta.versions[d] = Number(meta.versions[d] || 1) + 1;
+  });
+  return saveSyncMetaGas(meta);
+}
+
+function handleExportBackup(session) {
+  var users = readSheetRecords(SHEETS.USERS_AUTH);
+  var userEmailById = {};
+  users.forEach(function (u) {
+    userEmailById[String(u.id)] = sanitizeString(u.email || u.username || '').toLowerCase();
+  });
+
+  var teachersWithEmail = readSheetRecords(SHEETS.TEACHERS).map(function (t) {
+    return Object.assign({}, t, {
+      staff_category: resolveStaffCategoryGas(t.staff_category, t.status),
+      email: userEmailById[String(t.user_id)] || '',
+      is_tu_operator: isTuOperatorFlagGas(t.is_tu_operator),
+    });
+  });
+
+  var normalizedData = normalizeBackupDataGas({
+    school_profile: getSchoolProfileDataGas(),
+    users: users,
+    teachers: teachersWithEmail,
+    salary_components: readSheetRecords(SHEETS.SALARY_COMPONENTS),
+    attendances: readSheetRecords(SHEETS.ATTENDANCES),
+    attendance_logs: readSheetRecords(SHEETS.ATTENDANCE_LOGS),
+    payrolls: readSheetRecords(SHEETS.PAYROLLS),
+    payroll_details: readSheetRecords(SHEETS.PAYROLL_DETAILS),
+    disbursements: readSheetRecords(SHEETS.DISBURSEMENT_REQUESTS),
+    reimbursements: readSheetRecords(SHEETS.REIMBURSEMENTS),
+    notifications: readSheetRecords(SHEETS.NOTIFICATIONS),
+  });
+
+  var checksum = computeSha256Hex(JSON.stringify(normalizedData));
+  var counts = getBackupCountsGas(normalizedData);
+
+  return buildJsonResponse(200, {
+    ok: true,
+    data: {
+      format: 'SIPAYROLL_BACKUP',
+      schema_version: 1,
+      app_version: DEPLOY_VERSION,
+      exported_at: new Date().toISOString(),
+      exported_by: sanitizeString(session.email || session.username || 'admin'),
+      school_name:
+        (normalizedData.school_profile && normalizedData.school_profile.school_name) || 'SIPAYROLL',
+      counts: counts,
+      checksum_sha256: checksum,
+      data: normalizedData,
+    },
+  });
+}
+
+function handleRestoreBackup(session, payload) {
+  var phrase = sanitizeString((payload && payload.confirm_phrase) || '').toUpperCase();
+  if (phrase !== 'PULIHKAN DATA') {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Ketik frasa konfirmasi "PULIHKAN DATA" untuk menjalankan pemulihan.',
+    });
+  }
+
+  var backup = payload && payload.backup;
+  if (
+    !backup ||
+    typeof backup !== 'object' ||
+    backup.format !== 'SIPAYROLL_BACKUP' ||
+    Number(backup.schema_version) !== 1 ||
+    !backup.data ||
+    typeof backup.data !== 'object'
+  ) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Format file backup tidak valid atau versi skema tidak didukung.',
+    });
+  }
+
+  var normalized = normalizeBackupDataGas(backup.data);
+  var computedChecksum = computeSha256Hex(JSON.stringify(normalized));
+  var providedChecksum = sanitizeString(backup.checksum_sha256 || '').toLowerCase();
+  if (!providedChecksum || !constantTimeEqual(computedChecksum, providedChecksum)) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Verifikasi checksum SHA-256 gagal: file backup telah berubah atau rusak.',
+    });
+  }
+
+  var existingUsers = readSheetRecords(SHEETS.USERS_AUTH);
+  var prevAdmins = existingUsers.filter(function (u) {
+    return String(u.role || '').trim().toLowerCase() === ROLES.ADMIN;
+  });
+  var prevKepseks = existingUsers.filter(function (u) {
+    return String(u.role || '').trim().toLowerCase() === ROLES.KEPSEK;
+  });
+
+  var restoredUsers = normalized.users.map(function (u) {
+    var rRole = [ROLES.ADMIN, ROLES.KEPSEK, ROLES.GURU].indexOf(u.role) !== -1 ? u.role : ROLES.GURU;
+    return {
+      id: u.id || Utilities.getUuid(),
+      username: u.username || u.email,
+      password_hash: 'GMAIL_AUTH',
+      role: rRole,
+    };
+  });
+
+  // Anti-lockout: pastikan Admin yang login serta akun Kepsek tetap terjaga
+  var activeAdminEmail = sanitizeString(session.email || session.username || '').toLowerCase();
+  if (activeAdminEmail) {
+    var matchIdx = restoredUsers.findIndex(function (u) {
+      return String(u.username || '').trim().toLowerCase() === activeAdminEmail;
+    });
+    if (matchIdx !== -1) {
+      restoredUsers[matchIdx].role = ROLES.ADMIN;
+    } else {
+      restoredUsers.unshift({
+        id: sanitizeString(session.userId || '') || Utilities.getUuid(),
+        username: activeAdminEmail,
+        password_hash: 'GMAIL_AUTH',
+        role: ROLES.ADMIN,
+      });
+    }
+  }
+  if (
+    !restoredUsers.some(function (u) {
+      return u.role === ROLES.ADMIN;
+    }) &&
+    prevAdmins.length > 0
+  ) {
+    restoredUsers = prevAdmins.concat(restoredUsers);
+  }
+  if (
+    !restoredUsers.some(function (u) {
+      return u.role === ROLES.KEPSEK;
+    }) &&
+    prevKepseks.length > 0
+  ) {
+    restoredUsers = restoredUsers.concat(prevKepseks);
+  }
+
+  var restoredTeachers = normalized.teachers.map(function (t) {
+    return {
+      id: t.id || Utilities.getUuid(),
+      user_id: t.user_id || '',
+      nip: t.nip,
+      name: t.name,
+      status: t.status,
+      bank_account: t.bank_account,
+      staff_category: resolveStaffCategoryGas(t.staff_category, t.status),
+      is_tu_operator: Boolean(t.is_tu_operator),
+    };
+  });
+
+  var restoredAttLogs = normalized.attendance_logs.map(function (l) {
+    return Object.assign({}, l, {
+      date: l.date ? "'" + l.date : '',
+    });
+  });
+
+  var restoredReimbs = normalized.reimbursements.map(function (r) {
+    return Object.assign({}, r, {
+      expense_date: r.expense_date ? "'" + r.expense_date : '',
+    });
+  });
+
+  replaceSheetRecords(SHEETS.USERS_AUTH, restoredUsers);
+  replaceSheetRecords(SHEETS.TEACHERS, restoredTeachers);
+  replaceSheetRecords(SHEETS.SALARY_COMPONENTS, normalized.salary_components);
+  replaceSheetRecords(SHEETS.ATTENDANCES, normalized.attendances);
+  replaceSheetRecords(SHEETS.ATTENDANCE_LOGS, restoredAttLogs);
+  replaceSheetRecords(SHEETS.PAYROLLS, normalized.payrolls);
+  replaceSheetRecords(SHEETS.PAYROLL_DETAILS, normalized.payroll_details);
+  replaceSheetRecords(SHEETS.DISBURSEMENT_REQUESTS, normalized.disbursements);
+  replaceSheetRecords(SHEETS.REIMBURSEMENTS, restoredReimbs);
+  replaceSheetRecords(SHEETS.NOTIFICATIONS, normalized.notifications);
+
+  if (normalized.school_profile) {
+    var existingProfile = getSchoolProfileDataGas() || {};
+    var nextProfile = Object.assign({}, normalized.school_profile, {
+      google_client_id:
+        normalized.school_profile.google_client_id ||
+        sanitizeString(existingProfile.google_client_id || GOOGLE_OAUTH_CLIENT_ID || ''),
+    });
+    PropertiesService.getScriptProperties().setProperty(
+      'SIPAYROLL_SCHOOL_PROFILE',
+      JSON.stringify(nextProfile)
+    );
+  }
+
+  var actorEmail = sanitizeString(session.email || session.username || 'Admin/Bendahara');
+  var kepsekEmails = getRoleEmailListGas(ROLES.KEPSEK);
+  createNotificationRecordGas({
+    recipient_role: ROLES.KEPSEK,
+    recipient_teacher_id: '',
+    recipient_email: kepsekEmails.join(', '),
+    title: 'Pemulihan Data (Restore Backup) Dilakukan',
+    message:
+      actorEmail +
+      ' memulihkan database aplikasi dari cadangan bertanggal ' +
+      sanitizeString(backup.exported_at || '-') +
+      ' (' +
+      restoredTeachers.length +
+      ' PTK, ' +
+      normalized.payrolls.length +
+      ' periode payroll).',
+    type: 'maintenance_restore',
+    ref_id: '',
+  });
+  sendNotificationEmailGas(
+    kepsekEmails,
+    '[SIPAYROLL] Laporan Pemulihan Data (Restore Backup)',
+    'Yth. Kepala Sekolah,\n\n' +
+      actorEmail +
+      ' telah memulihkan data aplikasi SIPAYROLL dari file cadangan bertanggal ' +
+      sanitizeString(backup.exported_at || '-') +
+      ' (' +
+      restoredTeachers.length +
+      ' PTK, ' +
+      normalized.payrolls.length +
+      ' periode payroll).'
+  );
+
+  clearSyncDraftStateAndBumpAllGas();
+
+  return buildJsonResponse(200, {
+    ok: true,
+    data: {
+      restoredCounts: getBackupCountsGas(normalized),
+      restoredFrom: sanitizeString(backup.exported_at || ''),
+    },
+  });
+}
+
+function handleResetData(session, payload) {
+  if (!payload || payload.backup_confirmed !== true) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Unduh file backup (.JSON) terlebih dahulu sebelum melakukan reset data.',
+    });
+  }
+
+  var scope = payload.scope === 'full_operational' ? 'full_operational' : 'transactions';
+  var expectedPhrase =
+    scope === 'full_operational' ? 'RESET SEMUA DATA' : 'RESET TRANSAKSI';
+  var phrase = sanitizeString(payload.confirm_phrase || '').toUpperCase();
+  if (phrase !== expectedPhrase) {
+    return buildJsonResponse(400, {
+      ok: false,
+      error: 'Ketik frasa konfirmasi "' + expectedPhrase + '" untuk melanjutkan reset.',
+    });
+  }
+
+  var deletedCounts = {
+    attendances: readSheetRecords(SHEETS.ATTENDANCES).length,
+    attendance_logs: readSheetRecords(SHEETS.ATTENDANCE_LOGS).length,
+    payrolls: readSheetRecords(SHEETS.PAYROLLS).length,
+    payroll_details: readSheetRecords(SHEETS.PAYROLL_DETAILS).length,
+    disbursements: readSheetRecords(SHEETS.DISBURSEMENT_REQUESTS).length,
+    reimbursements: readSheetRecords(SHEETS.REIMBURSEMENTS).length,
+    notifications: readSheetRecords(SHEETS.NOTIFICATIONS).length,
+    teachers: scope === 'full_operational' ? readSheetRecords(SHEETS.TEACHERS).length : 0,
+    salary_components:
+      scope === 'full_operational' ? readSheetRecords(SHEETS.SALARY_COMPONENTS).length : 0,
+  };
+
+  replaceSheetRecords(SHEETS.ATTENDANCES, []);
+  replaceSheetRecords(SHEETS.ATTENDANCE_LOGS, []);
+  replaceSheetRecords(SHEETS.PAYROLLS, []);
+  replaceSheetRecords(SHEETS.PAYROLL_DETAILS, []);
+  replaceSheetRecords(SHEETS.DISBURSEMENT_REQUESTS, []);
+  replaceSheetRecords(SHEETS.REIMBURSEMENTS, []);
+  replaceSheetRecords(SHEETS.NOTIFICATIONS, []);
+
+  if (scope === 'full_operational') {
+    replaceSheetRecords(SHEETS.TEACHERS, []);
+    replaceSheetRecords(SHEETS.SALARY_COMPONENTS, []);
+
+    var activeEmail = sanitizeString(session.email || session.username || '').toLowerCase();
+    var keptUsers = readSheetRecords(SHEETS.USERS_AUTH).filter(function (u) {
+      var uRole = String(u.role || '').trim().toLowerCase();
+      var uEmail = String(u.email || u.username || '').trim().toLowerCase();
+      return (
+        uRole === ROLES.ADMIN ||
+        uRole === ROLES.KEPSEK ||
+        (activeEmail && uEmail === activeEmail)
+      );
+    });
+    replaceSheetRecords(SHEETS.USERS_AUTH, keptUsers);
+  }
+
+  var actorEmail = sanitizeString(session.email || session.username || 'Admin/Bendahara');
+  var scopeDesc =
+    scope === 'full_operational'
+      ? 'Reset Penuh (Transaksi + Master PTK; Akun Admin, Kepsek & Profil Sekolah dipertahankan)'
+      : 'Reset Transaksi Saja (Master PTK, Komponen Gaji, Akun Login & Profil Sekolah dipertahankan)';
+  var summaryLine =
+    deletedCounts.payrolls +
+    ' payroll, ' +
+    deletedCounts.attendances +
+    ' rekap kehadiran, ' +
+    deletedCounts.disbursements +
+    ' pencairan, ' +
+    deletedCounts.reimbursements +
+    ' belanja sekolah' +
+    (scope === 'full_operational' ? ', ' + deletedCounts.teachers + ' PTK' : '');
+
+  var kepsekEmails = getRoleEmailListGas(ROLES.KEPSEK);
+  createNotificationRecordGas({
+    recipient_role: ROLES.KEPSEK,
+    recipient_teacher_id: '',
+    recipient_email: kepsekEmails.join(', '),
+    title: 'Laporan Reset Data Sistem oleh Admin',
+    message: actorEmail + ' menjalankan ' + scopeDesc + '. Ringkasan terhapus: ' + summaryLine + '.',
+    type: 'maintenance_reset',
+    ref_id: '',
+  });
+  sendNotificationEmailGas(
+    kepsekEmails,
+    '[SIPAYROLL] Laporan Reset Data Sistem',
+    'Yth. Kepala Sekolah,\n\n' +
+      actorEmail +
+      ' telah menjalankan ' +
+      scopeDesc +
+      '.\nData yang dibersihkan: ' +
+      summaryLine +
+      '.\nAkun Admin, Akun Kepala Sekolah, serta Profil Sekolah tetap dipertahankan.'
+  );
+
+  clearSyncDraftStateAndBumpAllGas();
+
+  return buildJsonResponse(200, {
+    ok: true,
+    data: {
+      scope: scope,
+      deletedCounts: deletedCounts,
     },
   });
 }

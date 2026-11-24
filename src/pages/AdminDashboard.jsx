@@ -49,6 +49,9 @@ const AdminRoutineReimbursementCard = React.lazy(() =>
 );
 const SchoolProfileSection = React.lazy(() => import('../components/SchoolProfileSection'));
 const DataArchiveSection = React.lazy(() => import('../components/admin/DataArchiveSection'));
+const DataBackupResetSection = React.lazy(() =>
+  import('../components/admin/DataBackupResetSection')
+);
 const TeacherFormModal = React.lazy(() => import('../components/TeacherFormModal'));
 const TeacherImportModal = React.lazy(() => import('../components/TeacherImportModal'));
 const JtmCalculatorModal = React.lazy(() => import('../components/JtmCalculatorModal'));
@@ -164,6 +167,7 @@ export function AdminDashboard({
 
   const [selectedPayroll, setSelectedPayroll] = useState(null);
   const [payrollDetails, setPayrollDetails] = useState([]);
+  const [maintenanceSignal, setMaintenanceSignal] = useState(0);
 
   const [confirmDialog, setConfirmDialog] = useState({
     isOpen: false,
@@ -945,7 +949,15 @@ export function AdminDashboard({
   }, [refreshDomains]);
 
   const handleMaintenanceComplete = useCallback(() => {
-    refreshDomains(['attendances', 'payrolls'], { silent: false });
+    setSelectedPayroll(null);
+    setPayrollDetails([]);
+    setMaintenanceSignal((n) => n + 1);
+    dirtyAttTeacherIdsRef.current.clear();
+    refreshDomains(
+      ['teachers', 'attendances', 'payrolls', 'disbursements', 'reimbursements'],
+      { silent: false }
+    );
+    fetchSchoolProfileFromServer();
   }, [refreshDomains]);
 
   const currentPeriodPayroll = useMemo(
@@ -1353,7 +1365,14 @@ export function AdminDashboard({
             {activeTab === 'school_profile' && (
               <div className="space-y-6">
                 <SchoolProfileSection />
-                <DataArchiveSection onMaintenanceComplete={handleMaintenanceComplete} />
+                <DataArchiveSection
+                  refreshSignal={maintenanceSignal}
+                  onMaintenanceComplete={handleMaintenanceComplete}
+                />
+                <DataBackupResetSection
+                  refreshSignal={maintenanceSignal}
+                  onMaintenanceComplete={handleMaintenanceComplete}
+                />
               </div>
             )}
           </Suspense>

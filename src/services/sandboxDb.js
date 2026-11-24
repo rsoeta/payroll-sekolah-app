@@ -21,6 +21,11 @@ import {
   normalizeLogValidationStatus,
   roundAttendanceMetric,
 } from '../utils/attendanceHelpers';
+import {
+  computeBackupChecksumSync,
+  getBackupCounts,
+  normalizeBackupData,
+} from '../utils/backupHelpers';
 
 const STORAGE_KEY = 'sipayroll_sheets_sandbox_v1';
 const ADMIN_ROUTINE_TEACHER_ID = 'ADMIN_ROUTINE';
@@ -4315,6 +4320,294 @@ export async function executeSandboxRequest(method, action, token, payload = {})
           removedCount,
           remainingCount: kept.length,
           olderThanDays: days,
+        },
+      };
+    }
+
+    case 'maintenance.exportBackup': {
+      if (session.role !== 'admin') return forbidden();
+      const usersById = new Map((db.Users_Auth || []).map((u) => [u.id, u]));
+      const teachersWithEmail = (db.Teachers || []).map((t) => {
+        const linked = usersById.get(t.user_id);
+        return {
+          ...t,
+          email: t.email || linked?.email || linked?.username || '',
+        };
+      });
+      const normalizedData = normalizeBackupData({
+        school_profile: db.School_Profile || null,
+        users: db.Users_Auth || [],
+        teachers: teachersWithEmail,
+        salary_components: db.Salary_Components || [],
+        attendances: db.Attendances || [],
+        attendance_logs: db.Attendance_Logs || [],
+        payrolls: db.Payrolls || [],
+        payroll_details: db.Payroll_Details || [],
+        disbursements: db.Disbursement_Requests || [],
+        reimbursements: db.Reimbursements || [],
+        notifications: db.Notifications || [],
+      });
+      const checksum = computeBackupChecksumSync(normalizedData);
+      const counts = getBackupCounts(normalizedData);
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          format: 'SIPAYROLL_BACKUP',
+          schema_version: 1,
+          app_version: 'v23_BackupRestoreReset (Sandbox)',
+          exported_at: new Date().toISOString(),
+          exported_by: session.email || session.username || 'admin',
+          school_name: normalizedData.school_profile?.school_name || 'SIPAYROLL',
+          counts,
+          checksum_sha256: checksum,
+          data: normalizedData,
+        },
+      };
+    }
+
+    case 'maintenance.restoreBackup': {
+      if (session.role !== 'admin') return forbidden();
+      const phrase = String(payload.confirm_phrase || '').trim().toUpperCase();
+      if (phrase !== 'PULIHKAN DATA') {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Ketik frasa konfirmasi "PULIHKAN DATA" untuk menjalankan pemulihan.',
+        };
+      }
+      const backup = payload.backup;
+      if (
+        !backup ||
+        typeof backup !== 'object' ||
+        backup.format !== 'SIPAYROLL_BACKUP' ||
+        Number(backup.schema_version) !== 1 ||
+        !backup.data ||
+        typeof backup.data !== 'object'
+      ) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Format file backup tidak valid atau versi skema tidak didukung.',
+        };
+      }
+
+      const normalized = normalizeBackupData(backup.data);
+      const computedChecksum = computeBackupChecksumSync(normalized);
+      const providedChecksum = String(backup.checksum_sha256 || '').trim().toLowerCase();
+      if (!providedChecksum || providedChecksum !== computedChecksum) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Verifikasi checksum SHA-256 gagal: file backup telah berubah atau rusak.',
+        };
+      }
+
+      const prevAdmins = (db.Users_Auth || []).filter((u) => u.role === 'admin');
+      const prevKepseks = (db.Users_Auth || []).filter((u) => u.role === 'kepsek');
+
+      const restoredUsers = (normalized.users || []).map((u) => ({
+        id: u.id || generateUuidV4(),
+        username: u.username || u.email,
+        email: u.email || u.username,
+        password_hash: 'GMAIL_AUTH',
+        role: ['admin', 'kepsek', 'guru'].includes(u.role) ? u.role : 'guru',
+      }));
+
+      // Anti-lockout: always keep active Admin session & at least one Kepsek/Admin account
+      const activeAdminEmail = String(session.email || session.username || '')
+        .trim()
+        .toLowerCase();
+      if (activeAdminEmail) {
+        const existingIdx = restoredUsers.findIndex(
+          (u) => String(u.email || u.username || '').toLowerCase() === activeAdminEmail
+        );
+        if (existingIdx !== -1) {
+          restoredUsers[existingIdx].role = 'admin';
+        } else {
+          restoredUsers.unshift({
+            id: session.userId || generateUuidV4(),
+            username: activeAdminEmail,
+            email: activeAdminEmail,
+            password_hash: 'GMAIL_AUTH',
+            role: 'admin',
+          });
+        }
+      }
+      if (!restoredUsers.some((u) => u.role === 'admin') && prevAdmins.length > 0) {
+        restoredUsers.unshift(...prevAdmins);
+      }
+      if (!restoredUsers.some((u) => u.role === 'kepsek') && prevKepseks.length > 0) {
+        restoredUsers.push(...prevKepseks);
+      }
+
+      db.Users_Auth = restoredUsers;
+      db.Teachers = (normalized.teachers || []).map((t) => ({ ...t }));
+      db.Salary_Components = (normalized.salary_components || []).map((c) => ({
+        ...c,
+        infaq_zakat_enabled: Number(c.bpjs_deduction || 0) > 0,
+      }));
+      db.Attendances = (normalized.attendances || []).map((a) => ({ ...a }));
+      db.Attendance_Logs = (normalized.attendance_logs || []).map((l) => ({ ...l }));
+      db.Payrolls = (normalized.payrolls || []).map((p) => ({ ...p }));
+      db.Payroll_Details = (normalized.payroll_details || []).map((d) => ({ ...d }));
+      db.Disbursement_Requests = (normalized.disbursements || []).map((r) => ({ ...r }));
+      db.Reimbursements = (normalized.reimbursements || []).map((r) => ({ ...r }));
+      db.Notifications = (normalized.notifications || []).map((n) => ({ ...n }));
+
+      if (normalized.school_profile) {
+        const prevClientId = String(db.School_Profile?.google_client_id || '').trim();
+        db.School_Profile = {
+          ...normalized.school_profile,
+          google_client_id: normalized.school_profile.google_client_id || prevClientId,
+        };
+      }
+
+      const meta = ensureSyncMeta();
+      meta.attendance_period_versions = {};
+      meta.disbursement_period_versions = {};
+      meta.reimbursement_period_versions = {};
+      meta.draft_snapshots = {};
+
+      const nowIso = new Date().toISOString();
+      const actorEmail = session.email || session.username || 'Admin/Bendahara';
+      db.Notifications.unshift({
+        id: generateUuidV4(),
+        recipient_role: 'kepsek',
+        recipient_teacher_id: '',
+        recipient_email: '',
+        title: 'Pemulihan Data (Restore Backup) Dilakukan',
+        message: `${actorEmail} memulihkan database aplikasi dari file cadangan bertanggal ${
+          backup.exported_at || '-'
+        } (${normalized.teachers.length} PTK, ${normalized.payrolls.length} periode payroll).`,
+        type: 'maintenance_restore',
+        ref_id: '',
+        is_read: false,
+        created_at: nowIso,
+      });
+
+      bumpVersions([
+        'teachers',
+        'attendances',
+        'payrolls',
+        'disbursements',
+        'reimbursements',
+        'notifications',
+        'school_profile',
+      ]);
+      saveDb(db);
+
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          restoredCounts: getBackupCounts(normalized),
+          restoredFrom: String(backup.exported_at || ''),
+        },
+      };
+    }
+
+    case 'maintenance.resetData': {
+      if (session.role !== 'admin') return forbidden();
+      if (payload.backup_confirmed !== true) {
+        return {
+          ok: false,
+          status: 400,
+          error: 'Unduh file backup (.JSON) terlebih dahulu sebelum melakukan reset data.',
+        };
+      }
+
+      const scope = payload.scope === 'full_operational' ? 'full_operational' : 'transactions';
+      const expectedPhrase =
+        scope === 'full_operational' ? 'RESET SEMUA DATA' : 'RESET TRANSAKSI';
+      const phrase = String(payload.confirm_phrase || '').trim().toUpperCase();
+      if (phrase !== expectedPhrase) {
+        return {
+          ok: false,
+          status: 400,
+          error: `Ketik frasa konfirmasi "${expectedPhrase}" untuk melanjutkan reset.`,
+        };
+      }
+
+      const deletedCounts = {
+        attendances: (db.Attendances || []).length,
+        attendance_logs: (db.Attendance_Logs || []).length,
+        payrolls: (db.Payrolls || []).length,
+        payroll_details: (db.Payroll_Details || []).length,
+        disbursements: (db.Disbursement_Requests || []).length,
+        reimbursements: (db.Reimbursements || []).length,
+        notifications: (db.Notifications || []).length,
+        teachers: scope === 'full_operational' ? (db.Teachers || []).length : 0,
+        salary_components: scope === 'full_operational' ? (db.Salary_Components || []).length : 0,
+      };
+
+      db.Attendances = [];
+      db.Attendance_Logs = [];
+      db.Payrolls = [];
+      db.Payroll_Details = [];
+      db.Disbursement_Requests = [];
+      db.Reimbursements = [];
+      db.Notifications = [];
+
+      if (scope === 'full_operational') {
+        db.Teachers = [];
+        db.Salary_Components = [];
+        const activeEmail = String(session.email || session.username || '')
+          .trim()
+          .toLowerCase();
+        db.Users_Auth = (db.Users_Auth || []).filter(
+          (u) =>
+            u.role === 'admin' ||
+            u.role === 'kepsek' ||
+            (activeEmail && String(u.email || u.username || '').toLowerCase() === activeEmail)
+        );
+      }
+
+      const meta = ensureSyncMeta();
+      meta.attendance_period_versions = {};
+      meta.disbursement_period_versions = {};
+      meta.reimbursement_period_versions = {};
+      meta.draft_snapshots = {};
+
+      const nowIso = new Date().toISOString();
+      const actorEmail = session.email || session.username || 'Admin/Bendahara';
+      const scopeDesc =
+        scope === 'full_operational'
+          ? 'Reset Penuh (Transaksi + Master PTK; Akun Admin, Kepsek & Profil Sekolah dipertahankan)'
+          : 'Reset Transaksi Saja (Master PTK, Komponen Gaji, Akun Login & Profil Sekolah dipertahankan)';
+
+      db.Notifications.unshift({
+        id: generateUuidV4(),
+        recipient_role: 'kepsek',
+        recipient_teacher_id: '',
+        recipient_email: '',
+        title: 'Laporan Reset Data Sistem oleh Admin',
+        message: `${actorEmail} menjalankan ${scopeDesc}. Ringkasan terhapus: ${deletedCounts.payrolls} payroll, ${deletedCounts.attendances} rekap kehadiran, ${deletedCounts.disbursements} pencairan, ${deletedCounts.reimbursements} belanja sekolah${
+          scope === 'full_operational' ? `, ${deletedCounts.teachers} PTK` : ''
+        }.`,
+        type: 'maintenance_reset',
+        ref_id: '',
+        is_read: false,
+        created_at: nowIso,
+      });
+
+      bumpVersions([
+        'teachers',
+        'attendances',
+        'payrolls',
+        'disbursements',
+        'reimbursements',
+        'notifications',
+        'school_profile',
+      ]);
+      saveDb(db);
+
+      return {
+        ok: true,
+        status: 200,
+        data: {
+          scope,
+          deletedCounts,
         },
       };
     }
