@@ -1167,6 +1167,12 @@ export function GuruDashboard({
         tabs={[
           { id: 'slips', label: 'Slip Gaji', icon: Wallet, badge: slips.length },
           {
+            id: 'attendance',
+            label: 'Kehadiran',
+            icon: CalendarCheck,
+            badge: attendanceLogCount > 0 ? attendanceLogCount : undefined,
+          },
+          {
             id: 'disbursements',
             label: 'Pencairan',
             icon: Banknote,
@@ -1177,12 +1183,6 @@ export function GuruDashboard({
             label: 'Belanja',
             icon: Receipt,
             badge: reimbursementsCount > 0 ? reimbursementsCount : undefined,
-          },
-          {
-            id: 'attendance',
-            label: 'Kehadiran',
-            icon: CalendarCheck,
-            badge: attendanceLogCount > 0 ? attendanceLogCount : undefined,
           },
           { id: 'profile', label: 'Profil', icon: ShieldCheck },
         ]}
